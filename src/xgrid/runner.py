@@ -73,7 +73,7 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise SystemExit(f"Invalid JSON in config: {path}") from exc
 
 
-def _resolve_variables(variables: list[str] | None) -> list[VariableSpec]:
+def _resolve_variables(variables: list[str] | None) -> list[VariableSpec[object, object]]:
     registry = get_variable_registry()
     if not registry:
         raise SystemExit("No variables registered. Use the @variable decorator.")
@@ -85,7 +85,7 @@ def _resolve_variables(variables: list[str] | None) -> list[VariableSpec]:
     return [registry[name] for name in variables]
 
 
-def _validate_config(config: dict[str, Any], variable_specs: list[VariableSpec]) -> dict[str, dict[str, Any]]:
+def _validate_config(config: dict[str, Any], variable_specs: list[VariableSpec[object, object]]) -> dict[str, dict[str, Any]]:
     variables = config.get("variables")
     if not isinstance(variables, dict):
         raise SystemExit("Config must contain a 'variables' object")
@@ -108,7 +108,7 @@ def _validate_config(config: dict[str, Any], variable_specs: list[VariableSpec])
     return typed_vars
 
 
-def _materialize_variable(spec: VariableSpec, config: dict[str, Any]) -> list[tuple[Any, dict[str, Any]]]:
+def _materialize_variable(spec: VariableSpec[object, object], config: dict[str, Any]) -> list[tuple[Any, dict[str, Any]]]:
     kwargs = _filter_kwargs(spec.generator, config)
     results = list(spec.generator(**kwargs))
     normalized: list[tuple[Any, dict[str, Any]]] = []

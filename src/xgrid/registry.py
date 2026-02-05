@@ -1,24 +1,31 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any
+from typing import Generic, ParamSpec, TypeVar
+
+
+P = ParamSpec("P")
+ValueT = TypeVar("ValueT", covariant=True)
+MetaT = TypeVar("MetaT", covariant=True)
+ResultT = TypeVar("ResultT")
+
+VariableGenerator = Callable[P, Iterable[tuple[ValueT, Mapping[str, MetaT]]]]
+ExperimentRows = list[dict[str, object]]
 
 
 @dataclass(frozen=True)
-class VariableSpec:
+class VariableSpec(Generic[ValueT, MetaT]):
     name: str
-    generator: Callable[..., Iterable[tuple[Any, dict[str, Any]]]]
+    generator: Callable[..., Iterable[tuple[ValueT, Mapping[str, MetaT]]]]
 
 
-_VARIABLES: dict[str, VariableSpec] = {}
+_VARIABLES: dict[str, VariableSpec[object, object]] = {}
 
 
-def variable(*, name: str) -> Callable[[Callable[..., Iterable[tuple[Any, dict[str, Any]]]]], Callable[..., Iterable[tuple[Any, dict[str, Any]]]]]:
-    def decorator(
-        fn: Callable[..., Iterable[tuple[Any, dict[str, Any]]]]
-    ) -> Callable[..., Iterable[tuple[Any, dict[str, Any]]]]:
+def variable(*, name: str) -> Callable[[VariableGenerator[P, ValueT, MetaT]], VariableGenerator[P, ValueT, MetaT]]:
+    def decorator(fn: VariableGenerator[P, ValueT, MetaT]) -> VariableGenerator[P, ValueT, MetaT]:
         if name in _VARIABLES:
             raise ValueError(f"Variable '{name}' is already registered")
         _VARIABLES[name] = VariableSpec(name=name, generator=fn)
@@ -27,10 +34,10 @@ def variable(*, name: str) -> Callable[[Callable[..., Iterable[tuple[Any, dict[s
     return decorator
 
 
-def experiment(*, variables: list[str] | None = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+def experiment(*, variables: list[str] | None = None) -> Callable[[Callable[P, ResultT]], Callable[P, ResultT | ExperimentRows]]:
+    def decorator(fn: Callable[P, ResultT]) -> Callable[P, ResultT | ExperimentRows]:
         @wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> ResultT | ExperimentRows:
             if args or kwargs:
                 return fn(*args, **kwargs)
             from .runner import run_experiment
@@ -42,7 +49,7 @@ def experiment(*, variables: list[str] | None = None) -> Callable[[Callable[...,
     return decorator
 
 
-def get_variable_registry() -> dict[str, VariableSpec]:
+def get_variable_registry() -> dict[str, VariableSpec[object, object]]:
     return _VARIABLES
 
 
