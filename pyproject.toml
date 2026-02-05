@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "egerc", email = "153100377+egerc@users.noreply.github.com" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "polars>=1.38.0",
     "tqdm>=4.67.3",
