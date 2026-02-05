@@ -37,7 +37,7 @@ def build_rows(fn: Callable[..., Any], *, variables: list[str] | None, config: d
                 meta[f"{spec.name}__{key}"] = val
         result = fn(**values)
         for row in _normalize_result(result):
-            combined = _merge_row(values, meta, row)
+            combined = _merge_row(meta, row)
             rows.append(combined)
     return rows
 
@@ -140,9 +140,9 @@ def _normalize_result(result: Any) -> list[dict[str, Any]]:
     raise SystemExit("Experiment must return a dict or list of dicts")
 
 
-def _merge_row(values: dict[str, Any], meta: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+def _merge_row(*sources: dict[str, Any]) -> dict[str, Any]:
     combined: dict[str, Any] = {}
-    for source in (values, meta, row):
+    for source in sources:
         for key, value in source.items():
             if key in combined:
                 raise SystemExit(f"Duplicate key in row: '{key}'")

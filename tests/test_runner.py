@@ -48,10 +48,10 @@ class RunnerTests(unittest.TestCase):
 
             rows = [json.loads(line) for line in output_path.read_text().splitlines()]
             self.assertEqual(len(rows), 6)
-            self.assertEqual(rows[0]["a"], 0)
-            self.assertEqual(rows[0]["b"], 0)
-            self.assertEqual(rows[1]["a"], 0)
-            self.assertEqual(rows[1]["b"], 1)
+            self.assertNotIn("a", rows[0])
+            self.assertNotIn("b", rows[0])
+            self.assertNotIn("a", rows[1])
+            self.assertNotIn("b", rows[1])
             self.assertIn("a__value", rows[0])
             self.assertIn("b__value", rows[0])
 
@@ -100,8 +100,9 @@ class RunnerTests(unittest.TestCase):
                 run()
 
             header = output_path.read_text().splitlines()[0]
-            self.assertIn("a", header)
-            self.assertIn("value", header)
+            header_fields = header.split(",")
+            self.assertNotIn("a", header_fields)
+            self.assertIn("value", header_fields)
 
     def test_parquet_requires_optional_deps(self) -> None:
         try:
