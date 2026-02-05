@@ -1,0 +1,26 @@
+[project]
+name = "xgrid"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "egerc", email = "153100377+egerc@users.noreply.github.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "polars>=1.38.0",
+    "tqdm>=4.67.3",
+]
+
+[project.scripts]
+xgrid = "xgrid:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.408",
+    "ruff>=0.15.0",
+]
