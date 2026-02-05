@@ -196,14 +196,14 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _write_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
     try:
-        import pandas as pd
+        import polars as pl
     except ImportError as exc:
-        raise SystemExit("Parquet output requires pandas and pyarrow") from exc
-    df = pd.DataFrame(rows)
+        raise SystemExit("Parquet output requires polars") from exc
+    df = pl.DataFrame(rows)
     try:
-        df.to_parquet(path, index=False)
+        df.write_parquet(path)
     except Exception as exc:  # pragma: no cover - depends on optional deps
-        raise SystemExit("Parquet output requires pandas and pyarrow") from exc
+        raise SystemExit("Parquet output requires polars") from exc
 
 
 def _collect_fieldnames(rows: Iterable[dict[str, Any]]) -> list[str]:

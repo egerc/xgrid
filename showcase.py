@@ -24,12 +24,12 @@ def generator_c(start: int, stop: int, step: int = 1) -> Generator[Tuple[int, Di
         yield i, {"value": i}
 
 @experiment()
-def experiment(a: int, b: int, c: int) -> List[Dict]:
+def my_experiment(a: int, b: int, c: int) -> List[Dict]:
     polynomial = a * b + c
     sum = a + b + c
     product = a * b * c
     return [{"polynomial": polynomial, "sum": sum, "product": product}]
     
 if __name__ == "__main__":
-    experiment()
+    my_experiment()
     

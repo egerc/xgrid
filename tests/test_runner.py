@@ -106,12 +106,12 @@ class RunnerTests(unittest.TestCase):
 
     def test_parquet_requires_optional_deps(self) -> None:
         try:
-            import pandas  # noqa: F401
+            import polars  # noqa: F401
         except ImportError:
-            pandas = None
+            polars = None
 
-        if pandas is not None:
-            self.skipTest("pandas installed; parquet behavior depends on pyarrow")
+        if polars is not None:
+            self.skipTest("polars installed; parquet behavior depends on optional deps")
 
         @variable(name="a")
         def gen_a(start: int, stop: int) -> list[tuple[int, dict]]:
