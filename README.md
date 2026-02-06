@@ -7,7 +7,8 @@ xgrid runs parameterized experiments by expanding registered variables into a gr
 ## Prerequisites
 
 - Python 3.11+
-- `uv` (recommended) or `pip`
+- `uv` (required for managed `uv` environments)
+- Optional: Docker (for `--env-backend docker`)
 
 ## Installation
 
@@ -46,6 +47,7 @@ uv run xgrid run showcase.py --config config.json --output results.jsonl
 ```
 
 Outputs are written to the path passed to `--output` (for example, `results.csv` or `results.jsonl` in the current directory).
+Each run also writes a reproducibility sidecar at `<output>.run.json` (for example, `results.csv.run.json`).
 
 ## Writing an Experiment Script
 
@@ -81,12 +83,23 @@ Notes:
 
 ## Config File Format
 
-Config files are JSON objects with top-level `variables` and `experiments` objects:
+Config files are JSON objects with top-level `variables` and `experiments` objects.  
+They may also include an optional top-level `environment` object.
 - `variables.<generator_function_name>` maps to keyword arguments passed to that generator.
 - `experiments.<experiment_function_name>.bindings` maps experiment argument names to generator function names.
+- `environment` controls managed runtime setup for reproducible reruns.
 
 ```json
 {
+  "environment": {
+    "backend": "uv",
+    "python": "3.11",
+    "dependencies": ["numpy==2.2.0"],
+    "requirements_files": ["requirements.txt"],
+    "docker": {
+      "base_image": "python:3.11-slim"
+    }
+  },
   "variables": {
     "gen_a": { "start": 0, "stop": 3, "step": 1 },
     "gen_b": { "start": 0, "stop": 2 }
@@ -105,6 +118,7 @@ Config files are JSON objects with top-level `variables` and `experiments` objec
 Behavior:
 - Missing required bindings or missing bound variable configs cause the run to fail.
 - Extra variables in config are allowed, but produce warnings.
+- If `environment` is omitted and `--env-backend auto` is used, xgrid defaults to `uv`.
 
 ## CLI Usage
 
@@ -126,6 +140,9 @@ Useful flags:
 - `--log-level {DEBUG,INFO,WARNING,ERROR}` to control runtime logging verbosity (default: `INFO`).
 - `--progress` to force-enable the in-place progress bar.
 - `--no-progress` to disable the in-place progress bar.
+- `--env-backend {auto,none,uv,docker}` to choose environment orchestration.
+- `--rebuild-env` to force rebuild of managed environment artifacts.
+- `--refresh-lock` to recompute lock material before installing/building.
 
 Progress behavior:
 - If neither `--progress` nor `--no-progress` is provided, xgrid enables progress only in interactive TTY sessions.
@@ -133,6 +150,33 @@ Progress behavior:
 - With `--progress`, xgrid first performs a counting pre-pass to compute an exact total iteration count for a bounded progress bar.
 - Variable generators should be finite and deterministic for the same config to keep the computed total accurate.
 - Progress-enabled runs invoke variable generators an additional time during the counting pre-pass.
+
+### Managed Environments and Sidecars
+
+- Managed runs use cache path `.xgrid/envs/<fingerprint>/`.
+- The fingerprint includes environment spec, script hash, selected experiment, Python target, and xgrid version.
+- Each successful run writes `<output>.run.json` with:
+  - script/config/output paths
+  - script/config hashes
+  - selected backend and environment fingerprint
+  - lock material and lock fingerprint
+  - python version
+  - normalized CLI argv
+
+### Rerun Command
+
+Rerun from a sidecar file or directly from an output path:
+
+```bash
+xgrid rerun results.csv.run.json
+xgrid rerun results.csv
+```
+
+By default, rerun verifies script/config hashes from the manifest. To rerun with drift:
+
+```bash
+xgrid rerun results.csv --allow-drift
+```
 
 ## Output Formats
 
@@ -178,6 +222,9 @@ Without `--experiment`, the CLI exits and lists available experiment names.
 - Unsupported or uninferable output format
   - Cause: unsupported extension and no valid `--format`.
   - Fix: use `.csv`, `.jsonl`, `.parquet`, or pass `--format`.
+- Rerun hash mismatch
+  - Cause: script or config content changed since sidecar creation.
+  - Fix: restore original files or pass `--allow-drift`.
 
 ## Development Commands
 

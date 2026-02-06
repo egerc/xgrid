@@ -19,6 +19,17 @@ class RunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         registry_module._clear_registry()
 
+    def _run_cli(self, args: list[str]) -> int:
+        effective_args = list(args)
+        if (
+            effective_args
+            and effective_args[0] == "run"
+            and "--env-backend" not in effective_args
+            and "--_in-managed-env" not in effective_args
+        ):
+            effective_args.extend(["--env-backend", "none"])
+        return xgrid_main(effective_args)
+
     def _argument_name_for_variable(self, variable_name: str) -> str:
         if variable_name.startswith("gen_"):
             return variable_name[len("gen_") :]
@@ -101,7 +112,7 @@ class RunnerTests(unittest.TestCase):
                 },
             )
 
-            code = xgrid_main(
+            code = self._run_cli(
                 [
                     "run",
                     str(script_path),
@@ -145,7 +156,7 @@ class RunnerTests(unittest.TestCase):
                 config_path, {"gen_a": {"start": 0, "stop": 2, "step": 1}}
             )
 
-            code = xgrid_main(
+            code = self._run_cli(
                 [
                     "run",
                     "--script",
@@ -185,7 +196,7 @@ class RunnerTests(unittest.TestCase):
             )
             self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
 
-            xgrid_main(
+            self._run_cli(
                 [
                     "run",
                     str(script_path),
@@ -229,7 +240,7 @@ class RunnerTests(unittest.TestCase):
             self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit) as exc:
-                xgrid_main(
+                self._run_cli(
                     [
                         "run",
                         str(script_path),
@@ -271,7 +282,7 @@ class RunnerTests(unittest.TestCase):
             )
             self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
 
-            xgrid_main(
+            self._run_cli(
                 [
                     "run",
                     str(script_path),
@@ -312,7 +323,7 @@ class RunnerTests(unittest.TestCase):
             self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit) as exc:
-                xgrid_main(
+                self._run_cli(
                     [
                         "run",
                         str(script_path),
@@ -352,7 +363,7 @@ class RunnerTests(unittest.TestCase):
             self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit) as exc:
-                xgrid_main(
+                self._run_cli(
                     [
                         "run",
                         str(script_path),
@@ -388,7 +399,7 @@ class RunnerTests(unittest.TestCase):
             )
 
             with self.assertRaises(SystemExit) as exc:
-                xgrid_main(["run", str(script_path), "--output", str(output_path)])
+                self._run_cli(["run", str(script_path), "--output", str(output_path)])
             self.assertEqual(exc.exception.code, 2)
 
     def test_explicit_bindings_resolve_argument_to_generator(self) -> None:
@@ -419,7 +430,7 @@ class RunnerTests(unittest.TestCase):
                 experiment_names=("run",),
             )
 
-            code = xgrid_main(
+            code = self._run_cli(
                 [
                     "run",
                     str(script_path),
@@ -486,7 +497,7 @@ class RunnerTests(unittest.TestCase):
             )
 
             with self.assertRaises(SystemExit) as exc:
-                xgrid_main(
+                self._run_cli(
                     [
                         "run",
                         str(script_path),
@@ -702,7 +713,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_cli_rejects_progress_flag_conflict(self) -> None:
         with self.assertRaises(SystemExit) as exc:
-            xgrid_main(
+            self._run_cli(
                 [
                     "run",
                     "experiment.py",
