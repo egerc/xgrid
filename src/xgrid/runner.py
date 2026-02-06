@@ -8,8 +8,9 @@ import logging
 import sys
 import uuid
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from tqdm import tqdm
 
@@ -25,6 +26,13 @@ _LOGGER_NAME = "xgrid.runner"
 _LOG_FORMAT = "%(levelname)s %(message)s"
 _MAX_PROGRESS_TEXT_LENGTH = 120
 _LOG_HANDLER_NAME = "xgrid.runner.stderr"
+
+
+@dataclass(frozen=True)
+class BoundVariableSpec:
+    argument_name: str
+    variable_name: str
+    generator: Callable[..., Iterable[tuple[object, Mapping[str, object]]]]
 
 
 def configure_logging(log_level: str) -> logging.Logger:
@@ -178,17 +186,22 @@ def _build_rows_with_stats(
     show_progress: bool | None,
     logger: logging.Logger | None,
 ) -> tuple[list[dict[str, Any]], int]:
-    variable_specs = _resolve_variables()
-    config_vars = _validate_config(config, variable_specs)
+    bound_variable_specs, config_vars = _resolve_bound_variables(fn, config)
     show_progress_resolved = _resolve_show_progress(show_progress)
     progress_total: int | None = None
     if show_progress_resolved:
         progress_total = _compute_total_iterations(
-            variable_specs=variable_specs,
+            bound_variable_specs=bound_variable_specs,
             config_vars=config_vars,
         )
     if logger is not None:
-        variable_summary = ", ".join(spec.name for spec in variable_specs) or "none"
+        variable_summary = (
+            ", ".join(
+                f"{spec.argument_name}->{spec.variable_name}"
+                for spec in bound_variable_specs
+            )
+            or "none"
+        )
         if progress_total is None:
             logger.info(
                 "Initialized lazy variable iteration variables=%s total_iterations=unknown",
@@ -209,7 +222,7 @@ def _build_rows_with_stats(
         dynamic_ncols=True,
     ) as progress:
         for values, meta in _iter_variable_combinations(
-            variable_specs=variable_specs,
+            bound_variable_specs=bound_variable_specs,
             config_vars=config_vars,
         ):
             if show_progress_resolved:
@@ -260,105 +273,188 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise SystemExit(f"Invalid JSON in config: {path}") from exc
 
 
-def _resolve_variables() -> list[VariableSpec[object, object]]:
+def _resolve_variables() -> dict[str, VariableSpec[object, object]]:
     registry = get_variable_registry()
     if not registry:
         raise SystemExit("No variables registered. Use the @variable decorator.")
-    return list(registry.values())
+    return registry
 
 
-def _validate_config(
-    config: dict[str, Any], variable_specs: list[VariableSpec[object, object]]
-) -> dict[str, dict[str, Any]]:
-    variables = config.get("variables")
-    if not isinstance(variables, dict):
-        raise SystemExit("Config must contain a 'variables' object")
+def _resolve_bound_variables(
+    fn: Callable[..., Any], config: dict[str, Any]
+) -> tuple[list[BoundVariableSpec], dict[str, dict[str, Any]]]:
+    variable_registry = _resolve_variables()
+    variable_configs = _validate_variable_configs(config)
+    bindings = _validate_experiment_bindings(fn, config=config)
 
-    missing = []
-    for spec in variable_specs:
-        if spec.config_key not in variables:
-            if spec.name == spec.config_key:
-                missing.append(spec.name)
-            else:
-                missing.append(f"{spec.name} (config key: {spec.config_key})")
-    if missing:
-        raise SystemExit(f"Missing variable configs: {', '.join(missing)}")
-
-    variable_config_keys = {spec.config_key for spec in variable_specs}
-    extra = [name for name in variables.keys() if name not in variable_config_keys]
+    extra = [
+        name for name in variable_configs.keys() if name not in set(bindings.values())
+    ]
     if extra:
         warnings.warn(f"Unknown variables in config: {', '.join(extra)}", stacklevel=2)
 
-    typed_vars: dict[str, dict[str, Any]] = {}
-    for spec in variable_specs:
-        entry = variables.get(spec.config_key)
-        if not isinstance(entry, dict):
-            if spec.name == spec.config_key:
-                raise SystemExit(f"Config for variable '{spec.name}' must be an object")
+    bound_variable_specs: list[BoundVariableSpec] = []
+    config_vars: dict[str, dict[str, Any]] = {}
+    for argument_name, variable_name in bindings.items():
+        variable_spec = variable_registry.get(variable_name)
+        if variable_spec is None:
             raise SystemExit(
-                f"Config for variable '{spec.name}' (config key: '{spec.config_key}') "
-                "must be an object"
+                f"Unknown variable '{variable_name}' bound to argument "
+                f"'{argument_name}' for experiment '{fn.__name__}'"
             )
-        typed_vars[spec.name] = entry
+        variable_config = variable_configs.get(variable_name)
+        if variable_config is None:
+            raise SystemExit(
+                f"Missing variable configs: {variable_name} (bound to argument "
+                f"'{argument_name}' in experiment '{fn.__name__}')"
+            )
+        bound_variable_specs.append(
+            BoundVariableSpec(
+                argument_name=argument_name,
+                variable_name=variable_name,
+                generator=variable_spec.generator,
+            )
+        )
+        config_vars[argument_name] = variable_config
+
+    return bound_variable_specs, config_vars
+
+
+def _validate_variable_configs(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    variables = config.get("variables")
+    if not isinstance(variables, dict):
+        raise SystemExit("Config must contain a 'variables' object")
+    typed_vars: dict[str, dict[str, Any]] = {}
+    for variable_name, entry in variables.items():
+        if not isinstance(entry, dict):
+            raise SystemExit(f"Config for variable '{variable_name}' must be an object")
+        typed_vars[variable_name] = entry
     return typed_vars
 
 
+def _validate_experiment_bindings(
+    fn: Callable[..., Any], *, config: dict[str, Any]
+) -> dict[str, str]:
+    experiments = config.get("experiments")
+    if not isinstance(experiments, dict):
+        raise SystemExit("Config must contain an 'experiments' object")
+
+    experiment_config = experiments.get(fn.__name__)
+    if not isinstance(experiment_config, dict):
+        raise SystemExit(
+            f"Config must define object 'experiments.{fn.__name__}' for selected experiment"
+        )
+
+    bindings = experiment_config.get("bindings")
+    if not isinstance(bindings, dict):
+        raise SystemExit(
+            f"Config must define object 'experiments.{fn.__name__}.bindings'"
+        )
+
+    signature = inspect.signature(fn)
+    bindable_parameters: list[str] = []
+    required_parameters: list[str] = []
+    for parameter_name, parameter in signature.parameters.items():
+        if parameter.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_ONLY,
+        ):
+            bindable_parameters.append(parameter_name)
+            if parameter.default is inspect.Parameter.empty:
+                required_parameters.append(parameter_name)
+
+    bindable_set = set(bindable_parameters)
+    unknown_bindings = [key for key in bindings.keys() if key not in bindable_set]
+    if unknown_bindings:
+        raise SystemExit(
+            f"Unknown bindings for experiment '{fn.__name__}': "
+            f"{', '.join(sorted(unknown_bindings))}"
+        )
+
+    missing_required = [name for name in required_parameters if name not in bindings]
+    if missing_required:
+        raise SystemExit(
+            f"Missing bindings for experiment '{fn.__name__}': "
+            f"{', '.join(missing_required)}"
+        )
+
+    typed_bindings: dict[str, str] = {}
+    for parameter_name in bindable_parameters:
+        if parameter_name not in bindings:
+            continue
+        variable_name = bindings[parameter_name]
+        if not isinstance(variable_name, str) or not variable_name.strip():
+            raise SystemExit(
+                f"Binding for argument '{parameter_name}' in experiment "
+                f"'{fn.__name__}' must be a non-empty string"
+            )
+        typed_bindings[parameter_name] = variable_name
+    return typed_bindings
+
+
 def _iter_variable(
-    spec: VariableSpec[object, object], config: dict[str, Any]
+    spec: BoundVariableSpec, config: dict[str, Any]
 ) -> Iterable[tuple[Any, dict[str, Any]]]:
     kwargs = _filter_kwargs(spec.generator, config)
     for item in spec.generator(**kwargs):
         if not isinstance(item, tuple) or len(item) != 2:
-            raise SystemExit(f"Variable '{spec.name}' must yield (value, metadata)")
+            raise SystemExit(
+                f"Variable '{spec.variable_name}' bound to argument "
+                f"'{spec.argument_name}' must yield (value, metadata)"
+            )
         value, metadata = item
         if metadata is None:
             metadata = {}
         if not isinstance(metadata, dict):
-            raise SystemExit(f"Metadata for variable '{spec.name}' must be a dict")
+            raise SystemExit(
+                f"Metadata for variable '{spec.variable_name}' bound to argument "
+                f"'{spec.argument_name}' must be a dict"
+            )
         yield value, metadata
 
 
-def _count_variable_items(
-    spec: VariableSpec[object, object], config: dict[str, Any]
-) -> int:
+def _count_variable_items(spec: BoundVariableSpec, config: dict[str, Any]) -> int:
     return sum(1 for _value, _metadata in _iter_variable(spec, config))
 
 
 def _compute_total_iterations(
     *,
-    variable_specs: list[VariableSpec[object, object]],
+    bound_variable_specs: list[BoundVariableSpec],
     config_vars: dict[str, dict[str, Any]],
 ) -> int:
     total_iterations = 1
-    for spec in variable_specs:
-        total_iterations *= _count_variable_items(spec, config_vars[spec.name])
+    for spec in bound_variable_specs:
+        total_iterations *= _count_variable_items(spec, config_vars[spec.argument_name])
     return total_iterations
 
 
 def _iter_variable_combinations(
     *,
-    variable_specs: list[VariableSpec[object, object]],
+    bound_variable_specs: list[BoundVariableSpec],
     config_vars: dict[str, dict[str, Any]],
 ) -> Iterable[tuple[dict[str, Any], dict[str, Any]]]:
     def _walk(
         index: int, values: dict[str, Any], metadata: dict[str, Any]
     ) -> Iterable[tuple[dict[str, Any], dict[str, Any]]]:
-        if index == len(variable_specs):
+        if index == len(bound_variable_specs):
             yield dict(values), dict(metadata)
             return
 
-        spec = variable_specs[index]
-        for value, item_metadata in _iter_variable(spec, config_vars[spec.name]):
-            values[spec.name] = value
+        spec = bound_variable_specs[index]
+        for value, item_metadata in _iter_variable(
+            spec, config_vars[spec.argument_name]
+        ):
+            values[spec.argument_name] = value
             added_keys: list[str] = []
             for key, val in item_metadata.items():
-                metadata_key = f"{spec.name}__{key}"
+                metadata_key = f"{spec.argument_name}__{key}"
                 metadata[metadata_key] = val
                 added_keys.append(metadata_key)
             yield from _walk(index + 1, values, metadata)
             for metadata_key in added_keys:
                 del metadata[metadata_key]
-            del values[spec.name]
+            del values[spec.argument_name]
 
     yield from _walk(0, {}, {})
 

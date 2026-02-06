@@ -49,19 +49,19 @@ Outputs are written to the path passed to `--output` (for example, `results.csv`
 
 ## Writing an Experiment Script
 
-Use `@variable(name="...")` to register variable generators and `@experiment()` to register the experiment function.
+Use `@variable()` to register variable generators by function name and `@experiment()` to register the experiment function.
 
 ```python
 from xgrid import experiment, variable
 
 
-@variable(name="a", config_key="alpha")
+@variable()
 def gen_a(start: int, stop: int, step: int = 1):
     for i in range(start, stop, step):
         yield i, {"value": i}
 
 
-@variable(name="b")
+@variable()
 def gen_b(start: int, stop: int):
     for i in range(start, stop):
         yield i, {"value": i}
@@ -74,27 +74,36 @@ def run(a: int, b: int):
 
 Notes:
 - Each variable generator must yield `(value, metadata_dict)`.
-- `config_key` is optional. When omitted, xgrid reads config from the variable `name`.
 - Experiment functions must return either a `dict` or a `list[dict]`.
-- Experiments always run with all registered variables.
-- Variable metadata is added to each output row using `<variable_name>__<metadata_key>` (for example, `a__value`).
+- Experiments run only variables explicitly bound in config under `experiments.<experiment_name>.bindings`.
+- Variable metadata is added to each output row using `<experiment_arg>__<metadata_key>` (for example, `a__value`).
 - Raw variable values are not automatically included in output rows unless your experiment return value includes them.
 
 ## Config File Format
 
-Config files are JSON objects with a top-level `variables` object. Each variable entry maps to keyword arguments passed into that variable generator using the variable's effective config key (`config_key` when provided, otherwise `name`).
+Config files are JSON objects with top-level `variables` and `experiments` objects:
+- `variables.<generator_function_name>` maps to keyword arguments passed to that generator.
+- `experiments.<experiment_function_name>.bindings` maps experiment argument names to generator function names.
 
 ```json
 {
   "variables": {
-    "alpha": { "start": 0, "stop": 3, "step": 1 },
-    "b": { "start": 0, "stop": 2 }
+    "gen_a": { "start": 0, "stop": 3, "step": 1 },
+    "gen_b": { "start": 0, "stop": 2 }
+  },
+  "experiments": {
+    "run": {
+      "bindings": {
+        "a": "gen_a",
+        "b": "gen_b"
+      }
+    }
   }
 }
 ```
 
 Behavior:
-- Missing required variable configs cause the run to fail.
+- Missing required bindings or missing bound variable configs cause the run to fail.
 - Extra variables in config are allowed, but produce warnings.
 
 ## CLI Usage
@@ -164,7 +173,7 @@ Without `--experiment`, the CLI exits and lists available experiment names.
   - Cause: value passed to `--experiment` does not exist.
   - Fix: use one of the names listed in the error output.
 - Invalid config JSON or wrong schema
-  - Cause: malformed JSON or missing top-level `variables` object.
+  - Cause: malformed JSON or missing required `variables` / `experiments.<name>.bindings` objects.
   - Fix: validate JSON and match the documented schema.
 - Unsupported or uninferable output format
   - Cause: unsupported extension and no valid `--format`.

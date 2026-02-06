@@ -19,8 +19,51 @@ class RunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         registry_module._clear_registry()
 
-    def _write_config(self, path: Path, variables: dict) -> None:
-        path.write_text(json.dumps({"variables": variables}))
+    def _argument_name_for_variable(self, variable_name: str) -> str:
+        if variable_name.startswith("gen_"):
+            return variable_name[len("gen_") :]
+        if variable_name.startswith("generator_"):
+            return variable_name[len("generator_") :]
+        return variable_name
+
+    def _make_config(
+        self,
+        *,
+        variables: dict,
+        bindings: dict[str, str] | None = None,
+        experiment_names: tuple[str, ...] = ("run", "first", "second"),
+    ) -> dict[str, dict]:
+        resolved_bindings = (
+            bindings
+            if bindings is not None
+            else {
+                self._argument_name_for_variable(variable_name): variable_name
+                for variable_name in variables.keys()
+            }
+        )
+        experiments = {
+            experiment_name: {"bindings": dict(resolved_bindings)}
+            for experiment_name in experiment_names
+        }
+        return {"variables": variables, "experiments": experiments}
+
+    def _write_config(
+        self,
+        path: Path,
+        variables: dict,
+        *,
+        bindings: dict[str, str] | None = None,
+        experiment_names: tuple[str, ...] = ("run", "first", "second"),
+    ) -> None:
+        path.write_text(
+            json.dumps(
+                self._make_config(
+                    variables=variables,
+                    bindings=bindings,
+                    experiment_names=experiment_names,
+                )
+            )
+        )
 
     def _write_script(self, path: Path, source: str) -> None:
         path.write_text(textwrap.dedent(source))
@@ -37,11 +80,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
-                @variable(name="b")
+                @variable()
                 def gen_b(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -53,8 +96,8 @@ class RunnerTests(unittest.TestCase):
             self._write_config(
                 config_path,
                 {
-                    "a": {"start": 0, "stop": 2},
-                    "b": {"start": 0, "stop": 3},
+                    "gen_a": {"start": 0, "stop": 2},
+                    "gen_b": {"start": 0, "stop": 3},
                 },
             )
 
@@ -89,7 +132,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -98,7 +141,9 @@ class RunnerTests(unittest.TestCase):
                     return {"value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 2, "step": 1}})
+            self._write_config(
+                config_path, {"gen_a": {"start": 0, "stop": 2, "step": 1}}
+            )
 
             code = xgrid_main(
                 [
@@ -129,7 +174,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -138,7 +183,7 @@ class RunnerTests(unittest.TestCase):
                     return {"value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 2}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
 
             xgrid_main(
                 [
@@ -168,7 +213,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -181,7 +226,7 @@ class RunnerTests(unittest.TestCase):
                     return {"kind": "second", "value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 1}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit) as exc:
                 xgrid_main(
@@ -211,7 +256,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -224,7 +269,7 @@ class RunnerTests(unittest.TestCase):
                     return {"kind": "second", "value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 2}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
 
             xgrid_main(
                 [
@@ -255,7 +300,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -264,7 +309,7 @@ class RunnerTests(unittest.TestCase):
                     return {"kind": "first", "value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 1}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit) as exc:
                 xgrid_main(
@@ -295,7 +340,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -304,7 +349,7 @@ class RunnerTests(unittest.TestCase):
                     return {"kind": "first", "value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 1}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit) as exc:
                 xgrid_main(
@@ -332,7 +377,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -346,7 +391,7 @@ class RunnerTests(unittest.TestCase):
                 xgrid_main(["run", str(script_path), "--output", str(output_path)])
             self.assertEqual(exc.exception.code, 2)
 
-    def test_variable_config_key_resolves_alternate_config_entry(self) -> None:
+    def test_explicit_bindings_resolve_argument_to_generator(self) -> None:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             script_path = tmp_path / "experiment.py"
@@ -358,7 +403,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="learning_rate", config_key="lr")
+                @variable()
                 def gen_learning_rate(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -367,7 +412,12 @@ class RunnerTests(unittest.TestCase):
                     return {"learning_rate": learning_rate}
                 """,
             )
-            self._write_config(config_path, {"lr": {"start": 0, "stop": 2}})
+            self._write_config(
+                config_path,
+                {"gen_learning_rate": {"start": 0, "stop": 2}},
+                bindings={"learning_rate": "gen_learning_rate"},
+                experiment_names=("run",),
+            )
 
             code = xgrid_main(
                 [
@@ -384,26 +434,24 @@ class RunnerTests(unittest.TestCase):
             rows = [json.loads(line) for line in output_path.read_text().splitlines()]
             self.assertEqual(rows, [{"learning_rate": 0}, {"learning_rate": 1}])
 
-    def test_variable_rejects_duplicate_effective_config_key(self) -> None:
-        @variable(name="alpha", config_key="shared")
+    def test_variable_rejects_duplicate_function_name(self) -> None:
+        @variable()
         def gen_alpha():
             return [(1, {})]
 
         self.assertEqual(gen_alpha(), [(1, {})])
 
         with self.assertRaises(ValueError) as exc:
-            @variable(name="beta", config_key="shared")
-            def gen_beta():
+
+            @variable()
+            def gen_alpha():
                 return [(2, {})]
 
         self.assertEqual(
-            str(exc.exception),
-            "Config key 'shared' is already used by variable 'alpha' "
-            "(function 'gen_alpha'); cannot register variable 'beta' "
-            "(function 'gen_beta').",
+            str(exc.exception), "Variable 'gen_alpha' is already registered"
         )
 
-    def test_run_fails_for_duplicate_config_key_in_script(self) -> None:
+    def test_run_fails_for_unknown_bound_generator_in_config(self) -> None:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             script_path = tmp_path / "experiment.py"
@@ -415,11 +463,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="alpha", config_key="shared")
+                @variable()
                 def gen_alpha(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @variable(name="beta", config_key="shared")
+                @variable()
                 def gen_beta(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -431,8 +479,10 @@ class RunnerTests(unittest.TestCase):
             self._write_config(
                 config_path,
                 {
-                    "shared": {"start": 0, "stop": 1},
+                    "gen_alpha": {"start": 0, "stop": 1},
                 },
+                bindings={"alpha": "gen_alpha", "beta": "missing_generator"},
+                experiment_names=("run",),
             )
 
             with self.assertRaises(SystemExit) as exc:
@@ -447,14 +497,14 @@ class RunnerTests(unittest.TestCase):
                     ]
                 )
 
-            message = str(exc.exception)
-            self.assertIn("Failed to import script:", message)
-            self.assertIn("Config key 'shared' is already used by variable 'alpha'", message)
-            self.assertIn("function 'gen_alpha'", message)
-            self.assertIn("function 'gen_beta'", message)
+            self.assertIn(
+                "Unknown variable 'missing_generator' bound to argument 'beta' for "
+                "experiment 'run'",
+                str(exc.exception),
+            )
 
-    def test_missing_config_mentions_variable_and_config_key(self) -> None:
-        @variable(name="learning_rate", config_key="lr")
+    def test_missing_bound_variable_config_mentions_argument_and_variable(self) -> None:
+        @variable()
         def gen_learning_rate(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
@@ -463,15 +513,29 @@ class RunnerTests(unittest.TestCase):
             return {"learning_rate": learning_rate}
 
         with self.assertRaises(SystemExit) as exc:
-            runner_module.build_rows(run, config={"variables": {}}, show_progress=False)
+            runner_module.build_rows(
+                run,
+                config={
+                    "variables": {},
+                    "experiments": {
+                        "run": {
+                            "bindings": {
+                                "learning_rate": "gen_learning_rate",
+                            }
+                        }
+                    },
+                },
+                show_progress=False,
+            )
 
         self.assertIn(
-            "Missing variable configs: learning_rate (config key: lr)",
+            "Missing variable configs: gen_learning_rate (bound to argument "
+            "'learning_rate' in experiment 'run')",
             str(exc.exception),
         )
 
-    def test_extra_config_warning_uses_effective_config_keys(self) -> None:
-        @variable(name="learning_rate", config_key="lr")
+    def test_extra_config_warning_uses_variable_names(self) -> None:
+        @variable()
         def gen_learning_rate(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
@@ -481,9 +545,16 @@ class RunnerTests(unittest.TestCase):
 
         config = {
             "variables": {
-                "lr": {"start": 0, "stop": 1},
+                "gen_learning_rate": {"start": 0, "stop": 1},
                 "unexpected": {"start": 0, "stop": 1},
-            }
+            },
+            "experiments": {
+                "run": {
+                    "bindings": {
+                        "learning_rate": "gen_learning_rate",
+                    }
+                }
+            },
         }
 
         with warnings.catch_warnings(record=True) as captured:
@@ -492,7 +563,142 @@ class RunnerTests(unittest.TestCase):
 
         self.assertEqual(rows, [{"learning_rate": 0}])
         self.assertEqual(len(captured), 1)
-        self.assertIn("Unknown variables in config: unexpected", str(captured[0].message))
+        self.assertIn(
+            "Unknown variables in config: unexpected", str(captured[0].message)
+        )
+
+    def test_missing_experiments_object_is_rejected(self) -> None:
+        @variable()
+        def gen_a(start: int, stop: int):
+            return [(i, {}) for i in range(start, stop)]
+
+        @experiment()
+        def run(a: int):
+            return {"value": a}
+
+        with self.assertRaises(SystemExit) as exc:
+            runner_module.build_rows(
+                run,
+                config={"variables": {"gen_a": {"start": 0, "stop": 1}}},
+                show_progress=False,
+            )
+
+        self.assertEqual(
+            str(exc.exception), "Config must contain an 'experiments' object"
+        )
+
+    def test_missing_bindings_object_is_rejected(self) -> None:
+        @variable()
+        def gen_a(start: int, stop: int):
+            return [(i, {}) for i in range(start, stop)]
+
+        @experiment()
+        def run(a: int):
+            return {"value": a}
+
+        with self.assertRaises(SystemExit) as exc:
+            runner_module.build_rows(
+                run,
+                config={
+                    "variables": {"gen_a": {"start": 0, "stop": 1}},
+                    "experiments": {"run": {}},
+                },
+                show_progress=False,
+            )
+
+        self.assertEqual(
+            str(exc.exception), "Config must define object 'experiments.run.bindings'"
+        )
+
+    def test_missing_required_binding_is_rejected(self) -> None:
+        @variable()
+        def gen_a(start: int, stop: int):
+            return [(i, {}) for i in range(start, stop)]
+
+        @experiment()
+        def run(a: int, b: int):
+            return {"sum": a + b}
+
+        with self.assertRaises(SystemExit) as exc:
+            runner_module.build_rows(
+                run,
+                config=self._make_config(
+                    variables={"gen_a": {"start": 0, "stop": 1}},
+                    bindings={"a": "gen_a"},
+                    experiment_names=("run",),
+                ),
+                show_progress=False,
+            )
+
+        self.assertEqual(str(exc.exception), "Missing bindings for experiment 'run': b")
+
+    def test_unknown_binding_key_is_rejected(self) -> None:
+        @variable()
+        def gen_a(start: int, stop: int):
+            return [(i, {}) for i in range(start, stop)]
+
+        @experiment()
+        def run(a: int):
+            return {"value": a}
+
+        with self.assertRaises(SystemExit) as exc:
+            runner_module.build_rows(
+                run,
+                config=self._make_config(
+                    variables={"gen_a": {"start": 0, "stop": 1}},
+                    bindings={"a": "gen_a", "unknown": "gen_a"},
+                    experiment_names=("run",),
+                ),
+                show_progress=False,
+            )
+
+        self.assertEqual(
+            str(exc.exception), "Unknown bindings for experiment 'run': unknown"
+        )
+
+    def test_optional_parameter_can_be_unbound(self) -> None:
+        @variable()
+        def gen_a(start: int, stop: int):
+            return [(i, {}) for i in range(start, stop)]
+
+        @experiment()
+        def run(a: int, b: int = 5):
+            return {"sum": a + b}
+
+        rows = runner_module.build_rows(
+            run,
+            config=self._make_config(
+                variables={"gen_a": {"start": 0, "stop": 2}},
+                bindings={"a": "gen_a"},
+                experiment_names=("run",),
+            ),
+            show_progress=False,
+        )
+
+        self.assertEqual(rows, [{"sum": 5}, {"sum": 6}])
+
+    def test_duplicate_generator_bindings_expand_independent_axes(self) -> None:
+        @variable()
+        def gen_a(stop: int):
+            for i in range(stop):
+                yield i, {}
+
+        @experiment()
+        def run(a: int, b: int):
+            return {"a": a, "b": b}
+
+        rows = runner_module.build_rows(
+            run,
+            config=self._make_config(
+                variables={"gen_a": {"stop": 2}},
+                bindings={"a": "gen_a", "b": "gen_a"},
+                experiment_names=("run",),
+            ),
+            show_progress=False,
+        )
+
+        pairs = {(row["a"], row["b"]) for row in rows}
+        self.assertEqual(pairs, {(0, 0), (0, 1), (1, 0), (1, 1)})
 
     def test_experiment_variables_argument_is_rejected(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -506,7 +712,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -515,7 +721,7 @@ class RunnerTests(unittest.TestCase):
                     return {"value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 1}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit) as exc:
                 xgrid_main(
@@ -575,11 +781,11 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, 2)
 
     def test_build_rows_progress_updates_with_metadata(self) -> None:
-        @variable(name="a")
+        @variable()
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @variable(name="b")
+        @variable()
         def gen_b(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -587,12 +793,12 @@ class RunnerTests(unittest.TestCase):
         def run(a: int, b: int):
             return {"sum": a + b}
 
-        config = {
-            "variables": {
-                "a": {"start": 0, "stop": 2},
-                "b": {"start": 0, "stop": 2},
+        config = self._make_config(
+            variables={
+                "gen_a": {"start": 0, "stop": 2},
+                "gen_b": {"start": 0, "stop": 2},
             }
-        }
+        )
 
         class DummyProgress:
             def __init__(self, **kwargs):
@@ -620,9 +826,7 @@ class RunnerTests(unittest.TestCase):
             return progress
 
         with patch("xgrid.runner.tqdm", side_effect=make_progress):
-            rows = runner_module.build_rows(
-                run, config=config, show_progress=True
-            )
+            rows = runner_module.build_rows(run, config=config, show_progress=True)
 
         self.assertEqual(len(rows), 4)
         self.assertEqual(len(created), 1)
@@ -635,7 +839,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("b__value=0", progress.postfixes[0])
 
     def test_build_rows_without_progress_skips_total_precount(self) -> None:
-        @variable(name="a")
+        @variable()
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -643,7 +847,7 @@ class RunnerTests(unittest.TestCase):
         def run(a: int):
             return {"value": a}
 
-        config = {"variables": {"a": {"start": 0, "stop": 2}}}
+        config = self._make_config(variables={"gen_a": {"start": 0, "stop": 2}})
 
         class DummyProgress:
             def __init__(self, **kwargs):
@@ -672,9 +876,7 @@ class RunnerTests(unittest.TestCase):
             patch("xgrid.runner._compute_total_iterations") as compute_total_mock,
             patch("xgrid.runner.tqdm", side_effect=make_progress),
         ):
-            rows = runner_module.build_rows(
-                run, config=config, show_progress=False
-            )
+            rows = runner_module.build_rows(run, config=config, show_progress=False)
 
         self.assertEqual(len(rows), 2)
         self.assertEqual(len(created), 1)
@@ -682,7 +884,7 @@ class RunnerTests(unittest.TestCase):
         compute_total_mock.assert_not_called()
 
     def test_build_rows_zero_length_variable_uses_zero_total(self) -> None:
-        @variable(name="a")
+        @variable()
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -690,7 +892,7 @@ class RunnerTests(unittest.TestCase):
         def run(a: int):
             return {"value": a}
 
-        config = {"variables": {"a": {"start": 0, "stop": 0}}}
+        config = self._make_config(variables={"gen_a": {"start": 0, "stop": 0}})
 
         class DummyProgress:
             def __init__(self, **kwargs):
@@ -717,9 +919,7 @@ class RunnerTests(unittest.TestCase):
             return progress
 
         with patch("xgrid.runner.tqdm", side_effect=make_progress):
-            rows = runner_module.build_rows(
-                run, config=config, show_progress=True
-            )
+            rows = runner_module.build_rows(run, config=config, show_progress=True)
 
         self.assertEqual(rows, [])
         self.assertEqual(len(created), 1)
@@ -729,13 +929,13 @@ class RunnerTests(unittest.TestCase):
     def test_build_rows_reinvokes_inner_variable_generators(self) -> None:
         call_counts = {"a": 0, "b": 0}
 
-        @variable(name="a")
+        @variable()
         def gen_a(stop: int):
             call_counts["a"] += 1
             for i in range(stop):
                 yield i, {}
 
-        @variable(name="b")
+        @variable()
         def gen_b(stop: int):
             call_counts["b"] += 1
             for i in range(stop):
@@ -745,11 +945,11 @@ class RunnerTests(unittest.TestCase):
         def run(a: int, b: int):
             return {"sum": a + b}
 
-        config = {"variables": {"a": {"stop": 2}, "b": {"stop": 3}}}
-
-        rows = runner_module.build_rows(
-            run, config=config, show_progress=False
+        config = self._make_config(
+            variables={"gen_a": {"stop": 2}, "gen_b": {"stop": 3}}
         )
+
+        rows = runner_module.build_rows(run, config=config, show_progress=False)
 
         self.assertEqual(len(rows), 6)
         self.assertEqual(call_counts["a"], 1)
@@ -758,13 +958,13 @@ class RunnerTests(unittest.TestCase):
     def test_build_rows_progress_precount_adds_variable_invocations(self) -> None:
         call_counts = {"a": 0, "b": 0}
 
-        @variable(name="a")
+        @variable()
         def gen_a(stop: int):
             call_counts["a"] += 1
             for i in range(stop):
                 yield i, {}
 
-        @variable(name="b")
+        @variable()
         def gen_b(stop: int):
             call_counts["b"] += 1
             for i in range(stop):
@@ -774,7 +974,9 @@ class RunnerTests(unittest.TestCase):
         def run(a: int, b: int):
             return {"sum": a + b}
 
-        config = {"variables": {"a": {"stop": 2}, "b": {"stop": 3}}}
+        config = self._make_config(
+            variables={"gen_a": {"stop": 2}, "gen_b": {"stop": 3}}
+        )
 
         class DummyProgress:
             def __enter__(self):
@@ -790,16 +992,14 @@ class RunnerTests(unittest.TestCase):
                 return None
 
         with patch("xgrid.runner.tqdm", return_value=DummyProgress()):
-            rows = runner_module.build_rows(
-                run, config=config, show_progress=True
-            )
+            rows = runner_module.build_rows(run, config=config, show_progress=True)
 
         self.assertEqual(len(rows), 6)
         self.assertEqual(call_counts["a"], 2)
         self.assertEqual(call_counts["b"], 3)
 
     def test_build_rows_auto_progress_respects_tty(self) -> None:
-        @variable(name="a")
+        @variable()
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -807,7 +1007,7 @@ class RunnerTests(unittest.TestCase):
         def run(a: int):
             return {"value": a}
 
-        config = {"variables": {"a": {"start": 0, "stop": 1}}}
+        config = self._make_config(variables={"gen_a": {"start": 0, "stop": 1}})
         disables: list[bool] = []
 
         class DummyProgress:
@@ -852,7 +1052,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -861,7 +1061,7 @@ class RunnerTests(unittest.TestCase):
                     return {"value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 2}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
 
             with self.assertLogs("xgrid.runner", level="INFO") as log_context:
                 rows = runner_module.run_script(
@@ -885,7 +1085,9 @@ class RunnerTests(unittest.TestCase):
             msg=log_context.output,
         )
         self.assertTrue(
-            any("total_iterations=unknown" in message for message in log_context.output),
+            any(
+                "total_iterations=unknown" in message for message in log_context.output
+            ),
             msg=log_context.output,
         )
         self.assertTrue(
@@ -905,7 +1107,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -914,7 +1116,7 @@ class RunnerTests(unittest.TestCase):
                     return {"value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 2}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
 
             class DummyProgress:
                 def __init__(self, **_kwargs):
@@ -951,7 +1153,7 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_progress_does_not_change_output_rows(self) -> None:
-        @variable(name="a")
+        @variable()
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
@@ -959,11 +1161,12 @@ class RunnerTests(unittest.TestCase):
         def run(a: int):
             return [{"value": a}, {"double": a * 2}]
 
-        config = {"variables": {"a": {"start": 0, "stop": 2}}}
+        config = self._make_config(variables={"gen_a": {"start": 0, "stop": 2}})
 
         rows_without_progress = runner_module.build_rows(
             run, config=config, show_progress=False
         )
+
         class DummyProgress:
             def __enter__(self):
                 return self
@@ -1012,7 +1215,7 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable(name="a")
+                @variable()
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
@@ -1021,7 +1224,7 @@ class RunnerTests(unittest.TestCase):
                     return {"kind": "first", "value": a}
                 """,
             )
-            self._write_config(config_path, {"a": {"start": 0, "stop": 1}})
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
 
             with self.assertRaises(SystemExit):
                 xgrid_main(

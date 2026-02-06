@@ -4,7 +4,7 @@ from time import sleep
 from xgrid import experiment, variable
 
 
-@variable(name="a")
+@variable()
 def generator_a(
     start: int, stop: int, step: int = 1
 ) -> Generator[Tuple[int, Dict], None, None]:
@@ -12,7 +12,7 @@ def generator_a(
         yield i, {"value": i}
 
 
-@variable(name="b")
+@variable()
 def generator_b(
     start: int, stop: int, step: int = 1
 ) -> Generator[Tuple[int, Dict], None, None]:
@@ -20,7 +20,7 @@ def generator_b(
         yield i, {"value": i}
 
 
-@variable(name="c")
+@variable()
 def generator_c(
     start: int, stop: int, step: int = 1
 ) -> Generator[Tuple[int, Dict], None, None]:

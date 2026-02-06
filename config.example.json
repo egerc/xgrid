@@ -1,7 +1,16 @@
 {
   "variables": {
-    "a": { "start": 0, "stop": 50, "step": 1 },
-    "b": { "start": 0, "stop": 2, "step": 1 },
-    "c": { "start": 0, "stop": 4, "step": 1 }
+    "generator_a": { "start": 0, "stop": 50, "step": 1 },
+    "generator_b": { "start": 0, "stop": 2, "step": 1 },
+    "generator_c": { "start": 0, "stop": 4, "step": 1 }
+  },
+  "experiments": {
+    "my_experiment": {
+      "bindings": {
+        "a": "generator_a",
+        "b": "generator_b",
+        "c": "generator_c"
+      }
+    }
   }
 }
