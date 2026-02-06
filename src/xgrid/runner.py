@@ -1,31 +1,124 @@
 from __future__ import annotations
 
-import argparse
 import csv
+import importlib.util
 import inspect
 import itertools
 import json
 import sys
+import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .registry import VariableSpec, get_variable_registry
+from .registry import (
+    ExperimentSpec,
+    VariableSpec,
+    _clear_registry,
+    get_experiment_registry,
+    get_variable_registry,
+)
 
 
-def run_experiment(fn: Callable[..., Any], *, variables: list[str] | None = None, argv: list[str] | None = None) -> list[dict[str, Any]]:
-    args = _parse_args(argv)
-    config_path = _resolve_config_path(args.config)
+def run_registered_experiment(
+    fn: Callable[..., Any],
+    *,
+    variables: list[str] | None,
+    config_path: Path,
+    output_path: Path,
+    output_format: str | None,
+) -> list[dict[str, Any]]:
     config = _load_config(config_path)
     rows = build_rows(fn, variables=variables, config=config)
-    _write_output(rows, output_path=Path(args.output), output_format=args.format)
+    _write_output(rows, output_path=output_path, output_format=output_format)
     return rows
 
 
-def build_rows(fn: Callable[..., Any], *, variables: list[str] | None, config: dict[str, Any]) -> list[dict[str, Any]]:
+def run_script(
+    script_path: str | Path,
+    *,
+    config_path: str | Path,
+    output_path: str | Path,
+    output_format: str | None = None,
+    experiment_name: str | None = None,
+) -> list[dict[str, Any]]:
+    config_path_obj = Path(config_path)
+    output_path_obj = Path(output_path)
+    _clear_registry()
+    _load_script_module(Path(script_path))
+    experiment = _resolve_experiment(experiment_name)
+    return run_registered_experiment(
+        experiment.fn,
+        variables=experiment.variables,
+        config_path=config_path_obj,
+        output_path=output_path_obj,
+        output_format=output_format,
+    )
+
+
+def _load_script_module(script_path: Path) -> None:
+    resolved_script = script_path.expanduser().resolve()
+    if not resolved_script.exists():
+        raise SystemExit(f"Script not found: {resolved_script}")
+    if not resolved_script.is_file():
+        raise SystemExit(f"Script path is not a file: {resolved_script}")
+
+    module_name = f"_xgrid_script_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, resolved_script)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"Unable to load script: {resolved_script}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    added_path = str(resolved_script.parent)
+    sys.path.insert(0, added_path)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        sys.modules.pop(module_name, None)
+        raise SystemExit(f"Failed to import script: {resolved_script}") from exc
+    finally:
+        if sys.path and sys.path[0] == added_path:
+            del sys.path[0]
+        else:
+            try:
+                sys.path.remove(added_path)
+            except ValueError:
+                pass
+
+
+def _resolve_experiment(experiment_name: str | None) -> ExperimentSpec:
+    experiments = get_experiment_registry()
+    if not experiments:
+        raise SystemExit("No experiments registered. Use the @experiment decorator.")
+
+    available_names = sorted(experiments.keys())
+    if experiment_name is not None:
+        experiment = experiments.get(experiment_name)
+        if experiment is None:
+            available = ", ".join(available_names)
+            raise SystemExit(
+                f"Unknown experiment '{experiment_name}'. Available experiments: {available}"
+            )
+        return experiment
+
+    if len(experiments) == 1:
+        return experiments[available_names[0]]
+
+    available = ", ".join(available_names)
+    raise SystemExit(
+        f"Multiple experiments found. Provide --experiment. Available experiments: {available}"
+    )
+
+
+def build_rows(
+    fn: Callable[..., Any], *, variables: list[str] | None, config: dict[str, Any]
+) -> list[dict[str, Any]]:
     variable_specs = _resolve_variables(variables)
     config_vars = _validate_config(config, variable_specs)
-    materialized = [_materialize_variable(spec, config_vars[spec.name]) for spec in variable_specs]
+    materialized = [
+        _materialize_variable(spec, config_vars[spec.name]) for spec in variable_specs
+    ]
 
     rows: list[dict[str, Any]] = []
     for combo in itertools.product(*materialized):
@@ -42,28 +135,6 @@ def build_rows(fn: Callable[..., Any], *, variables: list[str] | None, config: d
     return rows
 
 
-def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="xgrid experiment runner")
-    parser.add_argument("--config", help="Path to config.json", default=None)
-    parser.add_argument("--output", help="Output path (.csv, .jsonl, .parquet)", required=True)
-    parser.add_argument("--format", choices=["csv", "jsonl", "parquet"], default=None)
-    return parser.parse_args(argv)
-
-
-def _resolve_config_path(config_arg: str | None) -> Path:
-    if config_arg:
-        return Path(config_arg)
-    if sys.stdin.isatty():
-        try:
-            user_input = input("Config path [config.json]: ").strip()
-        except EOFError:
-            user_input = ""
-        if not user_input:
-            user_input = "config.json"
-        return Path(user_input)
-    raise SystemExit("Missing --config in non-interactive mode")
-
-
 def _load_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise SystemExit(f"Config not found: {path}")
@@ -73,7 +144,9 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise SystemExit(f"Invalid JSON in config: {path}") from exc
 
 
-def _resolve_variables(variables: list[str] | None) -> list[VariableSpec[object, object]]:
+def _resolve_variables(
+    variables: list[str] | None,
+) -> list[VariableSpec[object, object]]:
     registry = get_variable_registry()
     if not registry:
         raise SystemExit("No variables registered. Use the @variable decorator.")
@@ -85,7 +158,9 @@ def _resolve_variables(variables: list[str] | None) -> list[VariableSpec[object,
     return [registry[name] for name in variables]
 
 
-def _validate_config(config: dict[str, Any], variable_specs: list[VariableSpec[object, object]]) -> dict[str, dict[str, Any]]:
+def _validate_config(
+    config: dict[str, Any], variable_specs: list[VariableSpec[object, object]]
+) -> dict[str, dict[str, Any]]:
     variables = config.get("variables")
     if not isinstance(variables, dict):
         raise SystemExit("Config must contain a 'variables' object")
@@ -108,7 +183,9 @@ def _validate_config(config: dict[str, Any], variable_specs: list[VariableSpec[o
     return typed_vars
 
 
-def _materialize_variable(spec: VariableSpec[object, object], config: dict[str, Any]) -> list[tuple[Any, dict[str, Any]]]:
+def _materialize_variable(
+    spec: VariableSpec[object, object], config: dict[str, Any]
+) -> list[tuple[Any, dict[str, Any]]]:
     kwargs = _filter_kwargs(spec.generator, config)
     results = list(spec.generator(**kwargs))
     normalized: list[tuple[Any, dict[str, Any]]] = []
@@ -126,7 +203,10 @@ def _materialize_variable(spec: VariableSpec[object, object], config: dict[str, 
 
 def _filter_kwargs(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
     signature = inspect.signature(fn)
-    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+    if any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    ):
         return dict(kwargs)
     allowed = set(signature.parameters.keys())
     return {key: value for key, value in kwargs.items() if key in allowed}
@@ -150,7 +230,9 @@ def _merge_row(*sources: dict[str, Any]) -> dict[str, Any]:
     return combined
 
 
-def _write_output(rows: list[dict[str, Any]], *, output_path: Path, output_format: str | None) -> None:
+def _write_output(
+    rows: list[dict[str, Any]], *, output_path: Path, output_format: str | None
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fmt = output_format or _infer_format(output_path)
     if fmt == "csv":
