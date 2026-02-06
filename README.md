@@ -166,3 +166,20 @@ uv run ruff check .
 uv run ruff format .
 uv run pyright
 ```
+
+## Pre-commit Hooks
+
+Install and enable the repository-managed pre-commit hook:
+
+```bash
+uv sync --dev
+uv run pre-commit install
+```
+
+Run all hooks manually at any time:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+The pre-commit hook runs `ruff check .`, `pyright`, and the full `pytest` suite on each commit, stopping on the first failure.
