@@ -119,6 +119,9 @@ Useful flags:
 Progress behavior:
 - If neither `--progress` nor `--no-progress` is provided, xgrid enables progress only in interactive TTY sessions.
 - The progress bar shows current grid iteration metadata in place (for example `a__value=1, b__value=2`).
+- With `--progress`, xgrid first performs a counting pre-pass to compute an exact total iteration count for a bounded progress bar.
+- Variable generators should be finite and deterministic for the same config to keep the computed total accurate.
+- Progress-enabled runs invoke variable generators an additional time during the counting pre-pass.
 
 ## Output Formats
 

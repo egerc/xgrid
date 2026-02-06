@@ -186,18 +186,31 @@ def _build_rows_with_stats(
 ) -> tuple[list[dict[str, Any]], int]:
     variable_specs = _resolve_variables(variables)
     config_vars = _validate_config(config, variable_specs)
+    show_progress_resolved = _resolve_show_progress(show_progress)
+    progress_total: int | None = None
+    if show_progress_resolved:
+        progress_total = _compute_total_iterations(
+            variable_specs=variable_specs,
+            config_vars=config_vars,
+        )
     if logger is not None:
         variable_summary = ", ".join(spec.name for spec in variable_specs) or "none"
-        logger.info(
-            "Initialized lazy variable iteration variables=%s total_iterations=unknown",
-            variable_summary,
-        )
+        if progress_total is None:
+            logger.info(
+                "Initialized lazy variable iteration variables=%s total_iterations=unknown",
+                variable_summary,
+            )
+        else:
+            logger.info(
+                "Initialized lazy variable iteration variables=%s total_iterations=%d",
+                variable_summary,
+                progress_total,
+            )
 
     rows: list[dict[str, Any]] = []
     iteration_count = 0
-    show_progress_resolved = _resolve_show_progress(show_progress)
     with tqdm(
-        total=None,
+        total=progress_total,
         disable=not show_progress_resolved,
         dynamic_ncols=True,
     ) as progress:
@@ -305,6 +318,23 @@ def _iter_variable(
         if not isinstance(metadata, dict):
             raise SystemExit(f"Metadata for variable '{spec.name}' must be a dict")
         yield value, metadata
+
+
+def _count_variable_items(
+    spec: VariableSpec[object, object], config: dict[str, Any]
+) -> int:
+    return sum(1 for _value, _metadata in _iter_variable(spec, config))
+
+
+def _compute_total_iterations(
+    *,
+    variable_specs: list[VariableSpec[object, object]],
+    config_vars: dict[str, dict[str, Any]],
+) -> int:
+    total_iterations = 1
+    for spec in variable_specs:
+        total_iterations *= _count_variable_items(spec, config_vars[spec.name])
+    return total_iterations
 
 
 def _iter_variable_combinations(

@@ -439,12 +439,104 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(rows), 4)
         self.assertEqual(len(created), 1)
         progress = created[0]
-        self.assertIsNone(progress.kwargs["total"])
+        self.assertEqual(progress.kwargs["total"], 4)
         self.assertEqual(progress.kwargs["disable"], False)
         self.assertEqual(sum(progress.updates), 4)
         self.assertEqual(len(progress.postfixes), 4)
         self.assertIn("a__value=0", progress.postfixes[0])
         self.assertIn("b__value=0", progress.postfixes[0])
+
+    def test_build_rows_without_progress_skips_total_precount(self) -> None:
+        @variable(name="a")
+        def gen_a(start: int, stop: int):
+            return [(i, {"value": i}) for i in range(start, stop)]
+
+        @experiment(variables=["a"])
+        def run(a: int):
+            return {"value": a}
+
+        config = {"variables": {"a": {"start": 0, "stop": 2}}}
+
+        class DummyProgress:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def set_postfix_str(self, _text: str) -> None:
+                return None
+
+            def update(self, _value: int) -> None:
+                return None
+
+        created: list[DummyProgress] = []
+
+        def make_progress(*_args, **kwargs):
+            progress = DummyProgress(**kwargs)
+            created.append(progress)
+            return progress
+
+        with (
+            patch("xgrid.runner._compute_total_iterations") as compute_total_mock,
+            patch("xgrid.runner.tqdm", side_effect=make_progress),
+        ):
+            rows = runner_module.build_rows(
+                run, variables=["a"], config=config, show_progress=False
+            )
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(created), 1)
+        self.assertIsNone(created[0].kwargs["total"])
+        compute_total_mock.assert_not_called()
+
+    def test_build_rows_zero_length_variable_uses_zero_total(self) -> None:
+        @variable(name="a")
+        def gen_a(start: int, stop: int):
+            return [(i, {"value": i}) for i in range(start, stop)]
+
+        @experiment(variables=["a"])
+        def run(a: int):
+            return {"value": a}
+
+        config = {"variables": {"a": {"start": 0, "stop": 0}}}
+
+        class DummyProgress:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.updates: list[int] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def set_postfix_str(self, _text: str) -> None:
+                return None
+
+            def update(self, value: int) -> None:
+                self.updates.append(value)
+
+        created: list[DummyProgress] = []
+
+        def make_progress(*_args, **kwargs):
+            progress = DummyProgress(**kwargs)
+            created.append(progress)
+            return progress
+
+        with patch("xgrid.runner.tqdm", side_effect=make_progress):
+            rows = runner_module.build_rows(
+                run, variables=["a"], config=config, show_progress=True
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].kwargs["total"], 0)
+        self.assertEqual(sum(created[0].updates), 0)
 
     def test_build_rows_reinvokes_inner_variable_generators(self) -> None:
         call_counts = {"a": 0, "b": 0}
@@ -474,6 +566,49 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(rows), 6)
         self.assertEqual(call_counts["a"], 1)
         self.assertEqual(call_counts["b"], 2)
+
+    def test_build_rows_progress_precount_adds_variable_invocations(self) -> None:
+        call_counts = {"a": 0, "b": 0}
+
+        @variable(name="a")
+        def gen_a(stop: int):
+            call_counts["a"] += 1
+            for i in range(stop):
+                yield i, {}
+
+        @variable(name="b")
+        def gen_b(stop: int):
+            call_counts["b"] += 1
+            for i in range(stop):
+                yield i, {}
+
+        @experiment(variables=["a", "b"])
+        def run(a: int, b: int):
+            return {"sum": a + b}
+
+        config = {"variables": {"a": {"stop": 2}, "b": {"stop": 3}}}
+
+        class DummyProgress:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def set_postfix_str(self, _text: str) -> None:
+                return None
+
+            def update(self, _value: int) -> None:
+                return None
+
+        with patch("xgrid.runner.tqdm", return_value=DummyProgress()):
+            rows = runner_module.build_rows(
+                run, variables=["a", "b"], config=config, show_progress=True
+            )
+
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(call_counts["a"], 2)
+        self.assertEqual(call_counts["b"], 3)
 
     def test_build_rows_auto_progress_respects_tty(self) -> None:
         @variable(name="a")
@@ -562,7 +697,68 @@ class RunnerTests(unittest.TestCase):
             msg=log_context.output,
         )
         self.assertTrue(
+            any("total_iterations=unknown" in message for message in log_context.output),
+            msg=log_context.output,
+        )
+        self.assertTrue(
             any("Completed run" in message for message in log_context.output),
+            msg=log_context.output,
+        )
+
+    def test_run_script_logs_known_total_when_progress_enabled(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            script_path = tmp_path / "experiment.py"
+            config_path = tmp_path / "config.json"
+            output_path = tmp_path / "out.jsonl"
+
+            self._write_script(
+                script_path,
+                """
+                from xgrid import experiment, variable
+
+                @variable(name="a")
+                def gen_a(start: int, stop: int):
+                    return [(i, {"value": i}) for i in range(start, stop)]
+
+                @experiment(variables=["a"])
+                def run(a: int):
+                    return {"value": a}
+                """,
+            )
+            self._write_config(config_path, {"a": {"start": 0, "stop": 2}})
+
+            class DummyProgress:
+                def __init__(self, **_kwargs):
+                    pass
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return None
+
+                def set_postfix_str(self, _text: str) -> None:
+                    return None
+
+                def update(self, _value: int) -> None:
+                    return None
+
+            with (
+                patch("xgrid.runner.tqdm", return_value=DummyProgress()),
+                self.assertLogs("xgrid.runner", level="INFO") as log_context,
+            ):
+                rows = runner_module.run_script(
+                    script_path,
+                    config_path=config_path,
+                    output_path=output_path,
+                    show_progress=True,
+                    log_level="INFO",
+                )
+
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(
+            any("total_iterations=2" in message for message in log_context.output),
             msg=log_context.output,
         )
 
