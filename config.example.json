@@ -1,6 +1,6 @@
 {
   "variables": {
-    "a": { "start": 0, "stop": 3, "step": 1 },
+    "a": { "start": 0, "stop": 50, "step": 1 },
     "b": { "start": 0, "stop": 2, "step": 1 },
     "c": { "start": 0, "stop": 4, "step": 1 }
   }

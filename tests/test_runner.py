@@ -439,12 +439,41 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(rows), 4)
         self.assertEqual(len(created), 1)
         progress = created[0]
-        self.assertEqual(progress.kwargs["total"], 4)
+        self.assertIsNone(progress.kwargs["total"])
         self.assertEqual(progress.kwargs["disable"], False)
         self.assertEqual(sum(progress.updates), 4)
         self.assertEqual(len(progress.postfixes), 4)
         self.assertIn("a__value=0", progress.postfixes[0])
         self.assertIn("b__value=0", progress.postfixes[0])
+
+    def test_build_rows_reinvokes_inner_variable_generators(self) -> None:
+        call_counts = {"a": 0, "b": 0}
+
+        @variable(name="a")
+        def gen_a(stop: int):
+            call_counts["a"] += 1
+            for i in range(stop):
+                yield i, {}
+
+        @variable(name="b")
+        def gen_b(stop: int):
+            call_counts["b"] += 1
+            for i in range(stop):
+                yield i, {}
+
+        @experiment(variables=["a", "b"])
+        def run(a: int, b: int):
+            return {"sum": a + b}
+
+        config = {"variables": {"a": {"stop": 2}, "b": {"stop": 3}}}
+
+        rows = runner_module.build_rows(
+            run, variables=["a", "b"], config=config, show_progress=False
+        )
+
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(call_counts["a"], 1)
+        self.assertEqual(call_counts["b"], 2)
 
     def test_build_rows_auto_progress_respects_tty(self) -> None:
         @variable(name="a")
@@ -526,7 +555,10 @@ class RunnerTests(unittest.TestCase):
             msg=log_context.output,
         )
         self.assertTrue(
-            any("Materialized variables" in message for message in log_context.output),
+            any(
+                "Initialized lazy variable iteration" in message
+                for message in log_context.output
+            ),
             msg=log_context.output,
         )
         self.assertTrue(

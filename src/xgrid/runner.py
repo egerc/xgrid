@@ -3,10 +3,8 @@ from __future__ import annotations
 import csv
 import importlib.util
 import inspect
-import itertools
 import json
 import logging
-import math
 import sys
 import uuid
 import warnings
@@ -188,48 +186,34 @@ def _build_rows_with_stats(
 ) -> tuple[list[dict[str, Any]], int]:
     variable_specs = _resolve_variables(variables)
     config_vars = _validate_config(config, variable_specs)
-    materialized = [
-        _materialize_variable(spec, config_vars[spec.name]) for spec in variable_specs
-    ]
-    variable_counts = {
-        spec.name: len(materialized_values)
-        for spec, materialized_values in zip(variable_specs, materialized)
-    }
-    total_iterations = math.prod(variable_counts.values())
     if logger is not None:
-        count_summary = ", ".join(
-            f"{name}={count}" for name, count in sorted(variable_counts.items())
-        )
-        if not count_summary:
-            count_summary = "none"
+        variable_summary = ", ".join(spec.name for spec in variable_specs) or "none"
         logger.info(
-            "Materialized variables %s total_iterations=%d",
-            count_summary,
-            total_iterations,
+            "Initialized lazy variable iteration variables=%s total_iterations=unknown",
+            variable_summary,
         )
 
     rows: list[dict[str, Any]] = []
+    iteration_count = 0
     show_progress_resolved = _resolve_show_progress(show_progress)
     with tqdm(
-        total=total_iterations,
+        total=None,
         disable=not show_progress_resolved,
         dynamic_ncols=True,
     ) as progress:
-        for combo in itertools.product(*materialized):
-            values: dict[str, Any] = {}
-            meta: dict[str, Any] = {}
-            for spec, (value, metadata) in zip(variable_specs, combo):
-                values[spec.name] = value
-                for key, val in metadata.items():
-                    meta[f"{spec.name}__{key}"] = val
+        for values, meta in _iter_variable_combinations(
+            variable_specs=variable_specs,
+            config_vars=config_vars,
+        ):
             if show_progress_resolved:
                 progress.set_postfix_str(_format_progress_metadata(meta))
             result = fn(**values)
             for row in _normalize_result(result):
                 combined = _merge_row(meta, row)
                 rows.append(combined)
+            iteration_count += 1
             progress.update(1)
-    return rows, total_iterations
+    return rows, iteration_count
 
 
 def _parse_log_level(log_level: str) -> int:
@@ -308,13 +292,11 @@ def _validate_config(
     return typed_vars
 
 
-def _materialize_variable(
+def _iter_variable(
     spec: VariableSpec[object, object], config: dict[str, Any]
-) -> list[tuple[Any, dict[str, Any]]]:
+) -> Iterable[tuple[Any, dict[str, Any]]]:
     kwargs = _filter_kwargs(spec.generator, config)
-    results = list(spec.generator(**kwargs))
-    normalized: list[tuple[Any, dict[str, Any]]] = []
-    for item in results:
+    for item in spec.generator(**kwargs):
         if not isinstance(item, tuple) or len(item) != 2:
             raise SystemExit(f"Variable '{spec.name}' must yield (value, metadata)")
         value, metadata = item
@@ -322,8 +304,35 @@ def _materialize_variable(
             metadata = {}
         if not isinstance(metadata, dict):
             raise SystemExit(f"Metadata for variable '{spec.name}' must be a dict")
-        normalized.append((value, metadata))
-    return normalized
+        yield value, metadata
+
+
+def _iter_variable_combinations(
+    *,
+    variable_specs: list[VariableSpec[object, object]],
+    config_vars: dict[str, dict[str, Any]],
+) -> Iterable[tuple[dict[str, Any], dict[str, Any]]]:
+    def _walk(
+        index: int, values: dict[str, Any], metadata: dict[str, Any]
+    ) -> Iterable[tuple[dict[str, Any], dict[str, Any]]]:
+        if index == len(variable_specs):
+            yield dict(values), dict(metadata)
+            return
+
+        spec = variable_specs[index]
+        for value, item_metadata in _iter_variable(spec, config_vars[spec.name]):
+            values[spec.name] = value
+            added_keys: list[str] = []
+            for key, val in item_metadata.items():
+                metadata_key = f"{spec.name}__{key}"
+                metadata[metadata_key] = val
+                added_keys.append(metadata_key)
+            yield from _walk(index + 1, values, metadata)
+            for metadata_key in added_keys:
+                del metadata[metadata_key]
+            del values[spec.name]
+
+    yield from _walk(0, {}, {})
 
 
 def _filter_kwargs(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:

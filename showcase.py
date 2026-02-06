@@ -1,4 +1,5 @@
 from typing import Dict, Generator, List, Tuple
+from time import sleep
 
 from xgrid import experiment, variable
 
@@ -32,4 +33,5 @@ def my_experiment(a: int, b: int, c: int) -> List[Dict]:
     polynomial = a * b + c
     sum = a + b + c
     product = a * b * c
+    sleep(0.01)
     return [{"polynomial": polynomial, "sum": sum, "product": product}]
