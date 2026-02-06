@@ -49,25 +49,25 @@ Outputs are written to the path passed to `--output` (for example, `results.csv`
 
 ## Writing an Experiment Script
 
-Use `@variable()` to register variable generators by function name and `@experiment()` to register the experiment function.
+Use `@variable` to register variable generators by function name and `@experiment` to register the experiment function.
 
 ```python
 from xgrid import experiment, variable
 
 
-@variable()
+@variable
 def gen_a(start: int, stop: int, step: int = 1):
     for i in range(start, stop, step):
         yield i, {"value": i}
 
 
-@variable()
+@variable
 def gen_b(start: int, stop: int):
     for i in range(start, stop):
         yield i, {"value": i}
 
 
-@experiment()
+@experiment
 def run(a: int, b: int):
     return {"sum": a + b}
 ```

@@ -80,15 +80,15 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
-                @variable()
+                @variable
                 def gen_b(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def run(a: int, b: int):
                     return [{"sum": a + b}]
                 """,
@@ -132,11 +132,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def run(a: int):
                     return {"value": a}
                 """,
@@ -174,11 +174,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def run(a: int):
                     return {"value": a}
                 """,
@@ -213,15 +213,15 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
 
-                @experiment()
+                @experiment
                 def second(a: int):
                     return {"kind": "second", "value": a}
                 """,
@@ -256,15 +256,15 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
 
-                @experiment()
+                @experiment
                 def second(a: int):
                     return {"kind": "second", "value": a}
                 """,
@@ -300,11 +300,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -340,11 +340,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -377,11 +377,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -403,11 +403,11 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_learning_rate(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def run(learning_rate: int):
                     return {"learning_rate": learning_rate}
                 """,
@@ -435,7 +435,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(rows, [{"learning_rate": 0}, {"learning_rate": 1}])
 
     def test_variable_rejects_duplicate_function_name(self) -> None:
-        @variable()
+        @variable
         def gen_alpha():
             return [(1, {})]
 
@@ -443,7 +443,7 @@ class RunnerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError) as exc:
 
-            @variable()
+            @variable
             def gen_alpha():
                 return [(2, {})]
 
@@ -463,15 +463,15 @@ class RunnerTests(unittest.TestCase):
                 """
                 from xgrid import experiment, variable
 
-                @variable()
+                @variable
                 def gen_alpha(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @variable()
+                @variable
                 def gen_beta(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment()
+                @experiment
                 def run(alpha: int, beta: int):
                     return {"sum": alpha + beta}
                 """,
@@ -504,11 +504,11 @@ class RunnerTests(unittest.TestCase):
             )
 
     def test_missing_bound_variable_config_mentions_argument_and_variable(self) -> None:
-        @variable()
+        @variable
         def gen_learning_rate(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(learning_rate: int):
             return {"learning_rate": learning_rate}
 
@@ -535,11 +535,11 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_extra_config_warning_uses_variable_names(self) -> None:
-        @variable()
+        @variable
         def gen_learning_rate(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(learning_rate: int):
             return {"learning_rate": learning_rate}
 
@@ -568,11 +568,11 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_missing_experiments_object_is_rejected(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -588,11 +588,11 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_missing_bindings_object_is_rejected(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -611,11 +611,11 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_missing_required_binding_is_rejected(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int, b: int):
             return {"sum": a + b}
 
@@ -633,11 +633,11 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(str(exc.exception), "Missing bindings for experiment 'run': b")
 
     def test_unknown_binding_key_is_rejected(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -657,11 +657,11 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_optional_parameter_can_be_unbound(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int, b: int = 5):
             return {"sum": a + b}
 
@@ -678,12 +678,12 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(rows, [{"sum": 5}, {"sum": 6}])
 
     def test_duplicate_generator_bindings_expand_independent_axes(self) -> None:
-        @variable()
+        @variable
         def gen_a(stop: int):
             for i in range(stop):
                 yield i, {}
 
-        @experiment()
+        @experiment
         def run(a: int, b: int):
             return {"a": a, "b": b}
 
@@ -717,15 +717,15 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, 2)
 
     def test_build_rows_progress_updates_with_metadata(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @variable()
+        @variable
         def gen_b(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int, b: int):
             return {"sum": a + b}
 
@@ -775,11 +775,11 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("b__value=0", progress.postfixes[0])
 
     def test_build_rows_zero_length_variable_uses_zero_total(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -818,11 +818,11 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(sum(created[0].updates), 0)
 
     def test_build_rows_auto_progress_respects_tty(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -860,11 +860,11 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(disables, [True, False])
 
     def test_progress_does_not_change_output_rows(self) -> None:
-        @variable()
+        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment()
+        @experiment
         def run(a: int):
             return [{"value": a}, {"double": a * 2}]
 
