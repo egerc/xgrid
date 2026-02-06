@@ -2,6 +2,7 @@ import json
 import sys
 import textwrap
 import unittest
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -171,11 +172,11 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def first(a: int):
                     return {"kind": "first", "value": a}
 
-                @experiment(variables=["a"])
+                @experiment()
                 def second(a: int):
                     return {"kind": "second", "value": a}
                 """,
@@ -214,11 +215,11 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def first(a: int):
                     return {"kind": "first", "value": a}
 
-                @experiment(variables=["a"])
+                @experiment()
                 def second(a: int):
                     return {"kind": "second", "value": a}
                 """,
@@ -258,7 +259,7 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -298,7 +299,7 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -335,7 +336,7 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -344,6 +345,193 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as exc:
                 xgrid_main(["run", str(script_path), "--output", str(output_path)])
             self.assertEqual(exc.exception.code, 2)
+
+    def test_variable_config_key_resolves_alternate_config_entry(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            script_path = tmp_path / "experiment.py"
+            config_path = tmp_path / "config.json"
+            output_path = tmp_path / "out.jsonl"
+
+            self._write_script(
+                script_path,
+                """
+                from xgrid import experiment, variable
+
+                @variable(name="learning_rate", config_key="lr")
+                def gen_learning_rate(start: int, stop: int):
+                    return [(i, {}) for i in range(start, stop)]
+
+                @experiment()
+                def run(learning_rate: int):
+                    return {"learning_rate": learning_rate}
+                """,
+            )
+            self._write_config(config_path, {"lr": {"start": 0, "stop": 2}})
+
+            code = xgrid_main(
+                [
+                    "run",
+                    str(script_path),
+                    "--config",
+                    str(config_path),
+                    "--output",
+                    str(output_path),
+                ]
+            )
+            self.assertEqual(code, 0)
+
+            rows = [json.loads(line) for line in output_path.read_text().splitlines()]
+            self.assertEqual(rows, [{"learning_rate": 0}, {"learning_rate": 1}])
+
+    def test_variable_rejects_duplicate_effective_config_key(self) -> None:
+        @variable(name="alpha", config_key="shared")
+        def gen_alpha():
+            return [(1, {})]
+
+        self.assertEqual(gen_alpha(), [(1, {})])
+
+        with self.assertRaises(ValueError) as exc:
+            @variable(name="beta", config_key="shared")
+            def gen_beta():
+                return [(2, {})]
+
+        self.assertEqual(
+            str(exc.exception),
+            "Config key 'shared' is already used by variable 'alpha' "
+            "(function 'gen_alpha'); cannot register variable 'beta' "
+            "(function 'gen_beta').",
+        )
+
+    def test_run_fails_for_duplicate_config_key_in_script(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            script_path = tmp_path / "experiment.py"
+            config_path = tmp_path / "config.json"
+            output_path = tmp_path / "out.jsonl"
+
+            self._write_script(
+                script_path,
+                """
+                from xgrid import experiment, variable
+
+                @variable(name="alpha", config_key="shared")
+                def gen_alpha(start: int, stop: int):
+                    return [(i, {}) for i in range(start, stop)]
+
+                @variable(name="beta", config_key="shared")
+                def gen_beta(start: int, stop: int):
+                    return [(i, {}) for i in range(start, stop)]
+
+                @experiment()
+                def run(alpha: int, beta: int):
+                    return {"sum": alpha + beta}
+                """,
+            )
+            self._write_config(
+                config_path,
+                {
+                    "shared": {"start": 0, "stop": 1},
+                },
+            )
+
+            with self.assertRaises(SystemExit) as exc:
+                xgrid_main(
+                    [
+                        "run",
+                        str(script_path),
+                        "--config",
+                        str(config_path),
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            message = str(exc.exception)
+            self.assertIn("Failed to import script:", message)
+            self.assertIn("Config key 'shared' is already used by variable 'alpha'", message)
+            self.assertIn("function 'gen_alpha'", message)
+            self.assertIn("function 'gen_beta'", message)
+
+    def test_missing_config_mentions_variable_and_config_key(self) -> None:
+        @variable(name="learning_rate", config_key="lr")
+        def gen_learning_rate(start: int, stop: int):
+            return [(i, {}) for i in range(start, stop)]
+
+        @experiment()
+        def run(learning_rate: int):
+            return {"learning_rate": learning_rate}
+
+        with self.assertRaises(SystemExit) as exc:
+            runner_module.build_rows(run, config={"variables": {}}, show_progress=False)
+
+        self.assertIn(
+            "Missing variable configs: learning_rate (config key: lr)",
+            str(exc.exception),
+        )
+
+    def test_extra_config_warning_uses_effective_config_keys(self) -> None:
+        @variable(name="learning_rate", config_key="lr")
+        def gen_learning_rate(start: int, stop: int):
+            return [(i, {}) for i in range(start, stop)]
+
+        @experiment()
+        def run(learning_rate: int):
+            return {"learning_rate": learning_rate}
+
+        config = {
+            "variables": {
+                "lr": {"start": 0, "stop": 1},
+                "unexpected": {"start": 0, "stop": 1},
+            }
+        }
+
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            rows = runner_module.build_rows(run, config=config, show_progress=False)
+
+        self.assertEqual(rows, [{"learning_rate": 0}])
+        self.assertEqual(len(captured), 1)
+        self.assertIn("Unknown variables in config: unexpected", str(captured[0].message))
+
+    def test_experiment_variables_argument_is_rejected(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            script_path = tmp_path / "experiment.py"
+            config_path = tmp_path / "config.json"
+            output_path = tmp_path / "out.jsonl"
+
+            self._write_script(
+                script_path,
+                """
+                from xgrid import experiment, variable
+
+                @variable(name="a")
+                def gen_a(start: int, stop: int):
+                    return [(i, {}) for i in range(start, stop)]
+
+                @experiment(variables=["a"])
+                def run(a: int):
+                    return {"value": a}
+                """,
+            )
+            self._write_config(config_path, {"a": {"start": 0, "stop": 1}})
+
+            with self.assertRaises(SystemExit) as exc:
+                xgrid_main(
+                    [
+                        "run",
+                        str(script_path),
+                        "--config",
+                        str(config_path),
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            message = str(exc.exception)
+            self.assertIn("Failed to import script:", message)
+            self.assertIn("unexpected keyword argument 'variables'", message)
 
     def test_cli_forwards_progress_and_log_level(self) -> None:
         with (
@@ -395,7 +583,7 @@ class RunnerTests(unittest.TestCase):
         def gen_b(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment(variables=["a", "b"])
+        @experiment()
         def run(a: int, b: int):
             return {"sum": a + b}
 
@@ -433,7 +621,7 @@ class RunnerTests(unittest.TestCase):
 
         with patch("xgrid.runner.tqdm", side_effect=make_progress):
             rows = runner_module.build_rows(
-                run, variables=["a", "b"], config=config, show_progress=True
+                run, config=config, show_progress=True
             )
 
         self.assertEqual(len(rows), 4)
@@ -451,7 +639,7 @@ class RunnerTests(unittest.TestCase):
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment(variables=["a"])
+        @experiment()
         def run(a: int):
             return {"value": a}
 
@@ -485,7 +673,7 @@ class RunnerTests(unittest.TestCase):
             patch("xgrid.runner.tqdm", side_effect=make_progress),
         ):
             rows = runner_module.build_rows(
-                run, variables=["a"], config=config, show_progress=False
+                run, config=config, show_progress=False
             )
 
         self.assertEqual(len(rows), 2)
@@ -498,7 +686,7 @@ class RunnerTests(unittest.TestCase):
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment(variables=["a"])
+        @experiment()
         def run(a: int):
             return {"value": a}
 
@@ -530,7 +718,7 @@ class RunnerTests(unittest.TestCase):
 
         with patch("xgrid.runner.tqdm", side_effect=make_progress):
             rows = runner_module.build_rows(
-                run, variables=["a"], config=config, show_progress=True
+                run, config=config, show_progress=True
             )
 
         self.assertEqual(rows, [])
@@ -553,14 +741,14 @@ class RunnerTests(unittest.TestCase):
             for i in range(stop):
                 yield i, {}
 
-        @experiment(variables=["a", "b"])
+        @experiment()
         def run(a: int, b: int):
             return {"sum": a + b}
 
         config = {"variables": {"a": {"stop": 2}, "b": {"stop": 3}}}
 
         rows = runner_module.build_rows(
-            run, variables=["a", "b"], config=config, show_progress=False
+            run, config=config, show_progress=False
         )
 
         self.assertEqual(len(rows), 6)
@@ -582,7 +770,7 @@ class RunnerTests(unittest.TestCase):
             for i in range(stop):
                 yield i, {}
 
-        @experiment(variables=["a", "b"])
+        @experiment()
         def run(a: int, b: int):
             return {"sum": a + b}
 
@@ -603,7 +791,7 @@ class RunnerTests(unittest.TestCase):
 
         with patch("xgrid.runner.tqdm", return_value=DummyProgress()):
             rows = runner_module.build_rows(
-                run, variables=["a", "b"], config=config, show_progress=True
+                run, config=config, show_progress=True
             )
 
         self.assertEqual(len(rows), 6)
@@ -615,7 +803,7 @@ class RunnerTests(unittest.TestCase):
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment(variables=["a"])
+        @experiment()
         def run(a: int):
             return {"value": a}
 
@@ -643,12 +831,12 @@ class RunnerTests(unittest.TestCase):
             patch("xgrid.runner.tqdm", side_effect=make_progress),
             patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: False)),
         ):
-            runner_module.build_rows(run, variables=["a"], config=config, show_progress=None)
+            runner_module.build_rows(run, config=config, show_progress=None)
         with (
             patch("xgrid.runner.tqdm", side_effect=make_progress),
             patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: True)),
         ):
-            runner_module.build_rows(run, variables=["a"], config=config, show_progress=None)
+            runner_module.build_rows(run, config=config, show_progress=None)
 
         self.assertEqual(disables, [True, False])
 
@@ -668,7 +856,7 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def run(a: int):
                     return {"value": a}
                 """,
@@ -721,7 +909,7 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def run(a: int):
                     return {"value": a}
                 """,
@@ -767,14 +955,14 @@ class RunnerTests(unittest.TestCase):
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment(variables=["a"])
+        @experiment()
         def run(a: int):
             return [{"value": a}, {"double": a * 2}]
 
         config = {"variables": {"a": {"start": 0, "stop": 2}}}
 
         rows_without_progress = runner_module.build_rows(
-            run, variables=["a"], config=config, show_progress=False
+            run, config=config, show_progress=False
         )
         class DummyProgress:
             def __enter__(self):
@@ -791,7 +979,7 @@ class RunnerTests(unittest.TestCase):
 
         with patch("xgrid.runner.tqdm", return_value=DummyProgress()):
             rows_with_progress = runner_module.build_rows(
-                run, variables=["a"], config=config, show_progress=True
+                run, config=config, show_progress=True
             )
 
         self.assertEqual(rows_without_progress, rows_with_progress)
@@ -828,7 +1016,7 @@ class RunnerTests(unittest.TestCase):
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment(variables=["a"])
+                @experiment()
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,

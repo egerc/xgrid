@@ -42,7 +42,6 @@ def configure_logging(log_level: str) -> logging.Logger:
 def run_registered_experiment(
     fn: Callable[..., Any],
     *,
-    variables: list[str] | None,
     config_path: Path,
     output_path: Path,
     output_format: str | None,
@@ -52,7 +51,6 @@ def run_registered_experiment(
     config = _load_config(config_path)
     rows, total_iterations = _build_rows_with_stats(
         fn,
-        variables=variables,
         config=config,
         show_progress=show_progress,
         logger=logger,
@@ -94,7 +92,6 @@ def run_script(
     )
     return run_registered_experiment(
         experiment.fn,
-        variables=experiment.variables,
         config_path=config_path_obj,
         output_path=output_path_obj,
         output_format=output_format,
@@ -123,7 +120,7 @@ def _load_script_module(script_path: Path) -> None:
         spec.loader.exec_module(module)
     except Exception as exc:
         sys.modules.pop(module_name, None)
-        raise SystemExit(f"Failed to import script: {resolved_script}") from exc
+        raise SystemExit(f"Failed to import script: {resolved_script}: {exc}") from exc
     finally:
         if sys.path and sys.path[0] == added_path:
             del sys.path[0]
@@ -161,14 +158,12 @@ def _resolve_experiment(experiment_name: str | None) -> ExperimentSpec:
 def build_rows(
     fn: Callable[..., Any],
     *,
-    variables: list[str] | None,
     config: dict[str, Any],
     show_progress: bool | None = None,
     logger: logging.Logger | None = None,
 ) -> list[dict[str, Any]]:
     rows, _ = _build_rows_with_stats(
         fn,
-        variables=variables,
         config=config,
         show_progress=show_progress,
         logger=logger,
@@ -179,12 +174,11 @@ def build_rows(
 def _build_rows_with_stats(
     fn: Callable[..., Any],
     *,
-    variables: list[str] | None,
     config: dict[str, Any],
     show_progress: bool | None,
     logger: logging.Logger | None,
 ) -> tuple[list[dict[str, Any]], int]:
-    variable_specs = _resolve_variables(variables)
+    variable_specs = _resolve_variables()
     config_vars = _validate_config(config, variable_specs)
     show_progress_resolved = _resolve_show_progress(show_progress)
     progress_total: int | None = None
@@ -266,18 +260,11 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise SystemExit(f"Invalid JSON in config: {path}") from exc
 
 
-def _resolve_variables(
-    variables: list[str] | None,
-) -> list[VariableSpec[object, object]]:
+def _resolve_variables() -> list[VariableSpec[object, object]]:
     registry = get_variable_registry()
     if not registry:
         raise SystemExit("No variables registered. Use the @variable decorator.")
-    if variables is None:
-        return list(registry.values())
-    missing = [name for name in variables if name not in registry]
-    if missing:
-        raise SystemExit(f"Unknown variables requested: {', '.join(missing)}")
-    return [registry[name] for name in variables]
+    return list(registry.values())
 
 
 def _validate_config(
@@ -287,21 +274,32 @@ def _validate_config(
     if not isinstance(variables, dict):
         raise SystemExit("Config must contain a 'variables' object")
 
-    variable_names = {spec.name for spec in variable_specs}
-    missing = [name for name in variable_names if name not in variables]
+    missing = []
+    for spec in variable_specs:
+        if spec.config_key not in variables:
+            if spec.name == spec.config_key:
+                missing.append(spec.name)
+            else:
+                missing.append(f"{spec.name} (config key: {spec.config_key})")
     if missing:
         raise SystemExit(f"Missing variable configs: {', '.join(missing)}")
 
-    extra = [name for name in variables.keys() if name not in variable_names]
+    variable_config_keys = {spec.config_key for spec in variable_specs}
+    extra = [name for name in variables.keys() if name not in variable_config_keys]
     if extra:
         warnings.warn(f"Unknown variables in config: {', '.join(extra)}", stacklevel=2)
 
     typed_vars: dict[str, dict[str, Any]] = {}
-    for name in variable_names:
-        entry = variables.get(name)
+    for spec in variable_specs:
+        entry = variables.get(spec.config_key)
         if not isinstance(entry, dict):
-            raise SystemExit(f"Config for variable '{name}' must be an object")
-        typed_vars[name] = entry
+            if spec.name == spec.config_key:
+                raise SystemExit(f"Config for variable '{spec.name}' must be an object")
+            raise SystemExit(
+                f"Config for variable '{spec.name}' (config key: '{spec.config_key}') "
+                "must be an object"
+            )
+        typed_vars[spec.name] = entry
     return typed_vars
 
 

@@ -55,7 +55,7 @@ Use `@variable(name="...")` to register variable generators and `@experiment()` 
 from xgrid import experiment, variable
 
 
-@variable(name="a")
+@variable(name="a", config_key="alpha")
 def gen_a(start: int, stop: int, step: int = 1):
     for i in range(start, stop, step):
         yield i, {"value": i}
@@ -74,18 +74,20 @@ def run(a: int, b: int):
 
 Notes:
 - Each variable generator must yield `(value, metadata_dict)`.
+- `config_key` is optional. When omitted, xgrid reads config from the variable `name`.
 - Experiment functions must return either a `dict` or a `list[dict]`.
+- Experiments always run with all registered variables.
 - Variable metadata is added to each output row using `<variable_name>__<metadata_key>` (for example, `a__value`).
 - Raw variable values are not automatically included in output rows unless your experiment return value includes them.
 
 ## Config File Format
 
-Config files are JSON objects with a top-level `variables` object. Each variable entry maps to keyword arguments passed into that variable generator.
+Config files are JSON objects with a top-level `variables` object. Each variable entry maps to keyword arguments passed into that variable generator using the variable's effective config key (`config_key` when provided, otherwise `name`).
 
 ```json
 {
   "variables": {
-    "a": { "start": 0, "stop": 3, "step": 1 },
+    "alpha": { "start": 0, "stop": 3, "step": 1 },
     "b": { "start": 0, "stop": 2 }
   }
 }

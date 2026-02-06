@@ -18,6 +18,7 @@ ExperimentRows = list[dict[str, object]]
 @dataclass(frozen=True)
 class VariableSpec(Generic[ValueT, MetaT]):
     name: str
+    config_key: str
     generator: Callable[..., Iterable[tuple[ValueT, Mapping[str, MetaT]]]]
 
 
@@ -25,7 +26,6 @@ class VariableSpec(Generic[ValueT, MetaT]):
 class ExperimentSpec:
     name: str
     fn: Callable[..., Any]
-    variables: list[str] | None
 
 
 _VARIABLES: dict[str, VariableSpec[object, object]] = {}
@@ -33,7 +33,7 @@ _EXPERIMENTS: dict[str, ExperimentSpec] = {}
 
 
 def variable(
-    *, name: str
+    *, name: str, config_key: str | None = None
 ) -> Callable[
     [VariableGenerator[P, ValueT, MetaT]], VariableGenerator[P, ValueT, MetaT]
 ]:
@@ -41,34 +41,50 @@ def variable(
 
     Args:
         name: Registry key to associate with the decorated variable generator.
+        config_key: Optional key used to read this variable's config entry from
+            the top-level ``variables`` config object. Defaults to ``name``.
 
     Returns:
         A decorator that stores the generator in the variable registry and
         returns the original function unchanged.
 
     Raises:
-        ValueError: If a variable with the same name is already registered.
+        ValueError: If a variable with the same name or effective config key is
+            already registered, or if ``config_key`` is empty/whitespace.
     """
 
     def decorator(
         fn: VariableGenerator[P, ValueT, MetaT],
     ) -> VariableGenerator[P, ValueT, MetaT]:
+        if config_key is not None and not config_key.strip():
+            raise ValueError(
+                f"Config key for variable '{name}' must be a non-empty string"
+            )
+        effective_config_key = config_key if config_key is not None else name
         if name in _VARIABLES:
             raise ValueError(f"Variable '{name}' is already registered")
-        _VARIABLES[name] = VariableSpec(name=name, generator=fn)
+        for existing in _VARIABLES.values():
+            if existing.config_key == effective_config_key:
+                raise ValueError(
+                    f"Config key '{effective_config_key}' is already used by "
+                    f"variable '{existing.name}' (function "
+                    f"'{existing.generator.__name__}'); cannot register variable "
+                    f"'{name}' (function '{fn.__name__}')."
+                )
+        _VARIABLES[name] = VariableSpec(
+            name=name,
+            config_key=effective_config_key,
+            generator=fn,
+        )
         return fn
 
     return decorator
 
 
-def experiment(
-    *, variables: list[str] | None = None
-) -> Callable[[Callable[P, ResultT]], Callable[P, ResultT | ExperimentRows]]:
+def experiment() -> Callable[
+    [Callable[P, ResultT]], Callable[P, ResultT | ExperimentRows]
+]:
     """Return a decorator that registers an experiment function.
-
-    Args:
-        variables: Optional list of variable names that the experiment should
-            run against. When omitted, all registered variables are available.
 
     Returns:
         A decorator that registers the experiment metadata and wraps the
@@ -81,9 +97,7 @@ def experiment(
     def decorator(fn: Callable[P, ResultT]) -> Callable[P, ResultT | ExperimentRows]:
         if fn.__name__ in _EXPERIMENTS:
             raise ValueError(f"Experiment '{fn.__name__}' is already registered")
-        _EXPERIMENTS[fn.__name__] = ExperimentSpec(
-            name=fn.__name__, fn=fn, variables=variables
-        )
+        _EXPERIMENTS[fn.__name__] = ExperimentSpec(name=fn.__name__, fn=fn)
 
         @wraps(fn)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> ResultT | ExperimentRows:
