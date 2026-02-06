@@ -155,21 +155,16 @@ def build_environment_spec(
 def compute_environment_fingerprint(
     *,
     spec: EnvironmentSpec,
-    script_hash: str,
-    experiment_name: str | None,
-    xgrid_version: str,
 ) -> str:
     payload = {
         "backend": spec.backend,
         "python": spec.python,
         "dependencies": list(spec.dependencies),
+        "docker_base_image": spec.docker_base_image,
         "requirements_files": [
             {"path": str(path), "sha256": _sha256_path(path)}
             for path in spec.requirements_files
         ],
-        "experiment_name": experiment_name,
-        "script_hash": script_hash,
-        "xgrid_version": xgrid_version,
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

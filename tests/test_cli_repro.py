@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sys
 import textwrap
 import unittest
@@ -68,61 +70,25 @@ class CliReproTests(unittest.TestCase):
             self.assertEqual(payload["environment"]["backend"], "none")
             self.assertEqual(payload["run"]["output_path"], str(output_path.resolve()))
 
-    def test_rerun_from_output_path(self) -> None:
-        with TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            script_path = tmp_path / "experiment.py"
-            config_path = tmp_path / "config.json"
-            output_path = tmp_path / "result.jsonl"
-            self._write_script(script_path)
-            self._write_config(config_path, stop=3)
+    def test_rerun_command_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit) as exc:
+            xgrid_main(["rerun", "results.jsonl"])
+        self.assertEqual(exc.exception.code, 2)
 
-            xgrid_main(
-                [
-                    "run",
-                    str(script_path),
-                    "--config",
-                    str(config_path),
-                    "--output",
-                    str(output_path),
-                    "--env-backend",
-                    "none",
-                ]
-            )
-            output_path.unlink()
-            code = xgrid_main(["rerun", str(output_path)])
-            self.assertEqual(code, 0)
-            rows = [json.loads(line) for line in output_path.read_text().splitlines()]
-            self.assertEqual(len(rows), 3)
-
-    def test_rerun_detects_drift_without_allow_flag(self) -> None:
-        with TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            script_path = tmp_path / "experiment.py"
-            config_path = tmp_path / "config.json"
-            output_path = tmp_path / "result.jsonl"
-            self._write_script(script_path)
-            self._write_config(config_path, stop=2)
-            xgrid_main(
-                [
-                    "run",
-                    str(script_path),
-                    "--config",
-                    str(config_path),
-                    "--output",
-                    str(output_path),
-                    "--env-backend",
-                    "none",
-                ]
-            )
-
-            self._write_config(config_path, stop=1)
-            with self.assertRaises(SystemExit) as exc:
-                xgrid_main(["rerun", str(output_path)])
-            self.assertIn("Pass --allow-drift", str(exc.exception))
-
-            code = xgrid_main(["rerun", str(output_path), "--allow-drift"])
-            self.assertEqual(code, 0)
+    def test_module_entrypoint_supports_python_dash_m(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(repo_root / "src")
+        completed = subprocess.run(
+            [sys.executable, "-m", "xgrid", "--help"],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("usage: xgrid", completed.stdout)
 
     def test_run_accepts_env_control_flags(self) -> None:
         with TemporaryDirectory() as tmp:

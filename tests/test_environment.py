@@ -65,9 +65,6 @@ class EnvironmentTests(unittest.TestCase):
             )
             fingerprint_one = environment_module.compute_environment_fingerprint(
                 spec=spec_one,
-                script_hash="script-hash",
-                experiment_name="run",
-                xgrid_version="0.1.0",
             )
             spec_two = environment_module.EnvironmentSpec(
                 backend="uv",
@@ -78,11 +75,64 @@ class EnvironmentTests(unittest.TestCase):
             )
             fingerprint_two = environment_module.compute_environment_fingerprint(
                 spec=spec_two,
-                script_hash="script-hash",
-                experiment_name="run",
-                xgrid_version="0.1.0",
             )
             self.assertNotEqual(fingerprint_one, fingerprint_two)
+
+    def test_compute_environment_fingerprint_stable_for_identical_spec(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            req_path = tmp_path / "requirements.txt"
+            req_path.write_text("numpy==2.2.0\n")
+            spec = environment_module.EnvironmentSpec(
+                backend="uv",
+                python="3.11",
+                dependencies=("pandas==2.2.3",),
+                requirements_files=(req_path,),
+                docker_base_image="python:3.11-slim",
+            )
+            fingerprint_one = environment_module.compute_environment_fingerprint(spec=spec)
+            fingerprint_two = environment_module.compute_environment_fingerprint(spec=spec)
+            self.assertEqual(fingerprint_one, fingerprint_two)
+
+    def test_compute_environment_fingerprint_changes_with_requirements_content(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            req_path = tmp_path / "requirements.txt"
+            req_path.write_text("numpy==2.2.0\n")
+            spec = environment_module.EnvironmentSpec(
+                backend="uv",
+                python="3.11",
+                dependencies=("pandas==2.2.3",),
+                requirements_files=(req_path,),
+                docker_base_image="python:3.11-slim",
+            )
+            fingerprint_one = environment_module.compute_environment_fingerprint(spec=spec)
+            req_path.write_text("numpy==2.2.1\n")
+            fingerprint_two = environment_module.compute_environment_fingerprint(spec=spec)
+            self.assertNotEqual(fingerprint_one, fingerprint_two)
+
+    def test_compute_environment_fingerprint_changes_with_docker_base_image(
+        self,
+    ) -> None:
+        spec_one = environment_module.EnvironmentSpec(
+            backend="docker",
+            python="3.11",
+            dependencies=("pandas==2.2.3",),
+            requirements_files=(),
+            docker_base_image="python:3.11-slim",
+        )
+        spec_two = environment_module.EnvironmentSpec(
+            backend="docker",
+            python="3.11",
+            dependencies=("pandas==2.2.3",),
+            requirements_files=(),
+            docker_base_image="python:3.12-slim",
+        )
+        fingerprint_one = environment_module.compute_environment_fingerprint(spec=spec_one)
+        fingerprint_two = environment_module.compute_environment_fingerprint(spec=spec_two)
+        self.assertNotEqual(fingerprint_one, fingerprint_two)
 
     def test_materialize_lock_collects_inline_and_file_dependencies(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -87,7 +87,7 @@ Config files are JSON objects with top-level `variables` and `experiments` objec
 They may also include an optional top-level `environment` object.
 - `variables.<generator_function_name>` maps to keyword arguments passed to that generator.
 - `experiments.<experiment_function_name>.bindings` maps experiment argument names to generator function names.
-- `environment` controls managed runtime setup for reproducible reruns.
+- `environment` controls managed runtime setup for environment reuse.
 
 ```json
 {
@@ -154,7 +154,7 @@ Progress behavior:
 ### Managed Environments and Sidecars
 
 - Managed runs use cache path `.xgrid/envs/<fingerprint>/`.
-- The fingerprint includes environment spec, script hash, selected experiment, Python target, and xgrid version.
+- The fingerprint includes managed environment backend, Python target, dependencies, Docker base image, and requirements file paths with content hashes.
 - Each successful run writes `<output>.run.json` with:
   - script/config/output paths
   - script/config hashes
@@ -162,21 +162,6 @@ Progress behavior:
   - lock material and lock fingerprint
   - python version
   - normalized CLI argv
-
-### Rerun Command
-
-Rerun from a sidecar file or directly from an output path:
-
-```bash
-xgrid rerun results.csv.run.json
-xgrid rerun results.csv
-```
-
-By default, rerun verifies script/config hashes from the manifest. To rerun with drift:
-
-```bash
-xgrid rerun results.csv --allow-drift
-```
 
 ## Output Formats
 
@@ -222,9 +207,6 @@ Without `--experiment`, the CLI exits and lists available experiment names.
 - Unsupported or uninferable output format
   - Cause: unsupported extension and no valid `--format`.
   - Fix: use `.csv`, `.jsonl`, `.parquet`, or pass `--format`.
-- Rerun hash mismatch
-  - Cause: script or config content changed since sidecar creation.
-  - Fix: restore original files or pass `--allow-drift`.
 
 ## Development Commands
 

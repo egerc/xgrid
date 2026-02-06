@@ -209,3 +209,5 @@ __marimo__/
 *.csv
 *.jsonl
 *.parquet
+*.run.json
+.xgrid

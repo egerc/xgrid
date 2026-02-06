@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +16,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run":
         return _handle_run_command(args)
-    if args.command == "rerun":
-        return _handle_rerun_command(args)
     raise SystemExit(f"Unknown command: {args.command}")
 
 
@@ -85,29 +82,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
 
-    rerun_parser = subparsers.add_parser(
-        "rerun",
-        help="Rerun from a previous run sidecar manifest",
-    )
-    rerun_parser.add_argument(
-        "target",
-        help="Path to <output>.run.json sidecar or the output path itself",
-    )
-    rerun_parser.add_argument(
-        "--allow-drift",
-        action="store_true",
-        help="Allow rerun even if script/config hashes changed",
-    )
-    rerun_parser.add_argument(
-        "--rebuild-env",
-        action="store_true",
-        help="Force rebuild of managed environment artifacts",
-    )
-    rerun_parser.add_argument(
-        "--refresh-lock",
-        action="store_true",
-        help="Recompute lock material before installation/build",
-    )
     return parser
 
 
@@ -175,54 +149,6 @@ def _handle_run_command(args: argparse.Namespace) -> int:
     )
 
 
-def _handle_rerun_command(args: argparse.Namespace) -> int:
-    manifest_path = repro.resolve_manifest_path(Path(args.target))
-    payload = repro.read_run_manifest(manifest_path)
-    if not args.allow_drift:
-        repro.validate_manifest_inputs(payload)
-
-    context = repro.context_from_manifest(payload)
-    selected_backend = payload["environment"]["backend"]
-    if selected_backend not in {"none", "uv", "docker"}:
-        raise SystemExit(
-            f"Run manifest has unsupported environment backend: {selected_backend}"
-        )
-
-    config = _load_config(context.config_path)
-    parsed_environment = environment_module.parse_environment_config(
-        config,
-        config_path=context.config_path,
-    )
-    normalized_argv = ["rerun", str(manifest_path)]
-    if args.allow_drift:
-        normalized_argv.append("--allow-drift")
-    if args.rebuild_env:
-        normalized_argv.append("--rebuild-env")
-    if args.refresh_lock:
-        normalized_argv.append("--refresh-lock")
-    environment_entry = payload["environment"]
-    python_override = environment_entry.get("python")
-    if python_override is not None and not isinstance(python_override, str):
-        python_override = None
-    lock_override = environment_entry.get("lock_material")
-    if lock_override is not None and not isinstance(lock_override, str):
-        lock_override = None
-    fingerprint_override = environment_entry.get("fingerprint")
-    if fingerprint_override is not None and not isinstance(fingerprint_override, str):
-        fingerprint_override = None
-    return _execute_run_with_environment(
-        context=context,
-        selected_backend=selected_backend,
-        parsed_environment=parsed_environment,
-        rebuild_env=args.rebuild_env,
-        refresh_lock=args.refresh_lock,
-        normalized_argv=normalized_argv,
-        lock_override_content=lock_override,
-        fingerprint_override=fingerprint_override,
-        python_override=python_override,
-    )
-
-
 def _execute_run_with_environment(
     *,
     context: repro.RunContext,
@@ -231,9 +157,6 @@ def _execute_run_with_environment(
     rebuild_env: bool,
     refresh_lock: bool,
     normalized_argv: list[str],
-    lock_override_content: str | None = None,
-    fingerprint_override: str | None = None,
-    python_override: str | None = None,
 ) -> int:
     logger = configure_logging(context.log_level)
     project_root = Path.cwd().resolve()
@@ -241,18 +164,9 @@ def _execute_run_with_environment(
         selected_backend=selected_backend,
         parsed_environment=parsed_environment,
     )
-    if spec is not None and python_override is not None:
-        spec = replace(spec, python=python_override)
-
-    script_hash = repro.sha256_file(context.script_path)
-    fingerprint = fingerprint_override
-    if spec is not None and not fingerprint:
-        fingerprint = environment_module.compute_environment_fingerprint(
-            spec=spec,
-            script_hash=script_hash,
-            experiment_name=context.experiment_name,
-            xgrid_version=__version__,
-        )
+    fingerprint: str | None = None
+    if spec is not None:
+        fingerprint = environment_module.compute_environment_fingerprint(spec=spec)
 
     prepared = environment_module.prepare_environment(
         project_root=project_root,
@@ -260,7 +174,6 @@ def _execute_run_with_environment(
         fingerprint=fingerprint,
         rebuild=rebuild_env,
         refresh_lock=refresh_lock,
-        lock_override_content=lock_override_content,
     )
     logger.info(
         "Environment ready backend=%s status=%s fingerprint=%s",
