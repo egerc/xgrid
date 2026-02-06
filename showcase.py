@@ -1,10 +1,5 @@
 from typing import Dict, Generator, List, Tuple
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-
 from xgrid import experiment, variable
 
 
