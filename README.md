@@ -112,6 +112,13 @@ Do not provide both forms at once.
 Useful flags:
 - `--format {csv,jsonl,parquet}` to force output format instead of inferring from extension.
 - `--experiment <name>` when the script defines multiple experiments.
+- `--log-level {DEBUG,INFO,WARNING,ERROR}` to control runtime logging verbosity (default: `INFO`).
+- `--progress` to force-enable the in-place progress bar.
+- `--no-progress` to disable the in-place progress bar.
+
+Progress behavior:
+- If neither `--progress` nor `--no-progress` is provided, xgrid enables progress only in interactive TTY sessions.
+- The progress bar shows current grid iteration metadata in place (for example `a__value=1, b__value=2`).
 
 ## Output Formats
 

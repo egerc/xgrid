@@ -5,11 +5,15 @@ import importlib.util
 import inspect
 import itertools
 import json
+import logging
+import math
 import sys
 import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Callable, Iterable
+
+from tqdm import tqdm
 
 from .registry import (
     ExperimentSpec,
@@ -19,6 +23,23 @@ from .registry import (
     get_variable_registry,
 )
 
+_LOGGER_NAME = "xgrid.runner"
+_LOG_FORMAT = "%(levelname)s %(message)s"
+_MAX_PROGRESS_TEXT_LENGTH = 120
+_LOG_HANDLER_NAME = "xgrid.runner.stderr"
+
+
+def configure_logging(log_level: str) -> logging.Logger:
+    logger = logging.getLogger(_LOGGER_NAME)
+    if not any(handler.get_name() == _LOG_HANDLER_NAME for handler in logger.handlers):
+        handler = logging.StreamHandler()
+        handler.set_name(_LOG_HANDLER_NAME)
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        logger.addHandler(handler)
+    logger.setLevel(_parse_log_level(log_level))
+    logger.propagate = False
+    return logger
+
 
 def run_registered_experiment(
     fn: Callable[..., Any],
@@ -27,10 +48,25 @@ def run_registered_experiment(
     config_path: Path,
     output_path: Path,
     output_format: str | None,
+    show_progress: bool | None = None,
+    logger: logging.Logger | None = None,
 ) -> list[dict[str, Any]]:
     config = _load_config(config_path)
-    rows = build_rows(fn, variables=variables, config=config)
+    rows, total_iterations = _build_rows_with_stats(
+        fn,
+        variables=variables,
+        config=config,
+        show_progress=show_progress,
+        logger=logger,
+    )
     _write_output(rows, output_path=output_path, output_format=output_format)
+    if logger is not None:
+        logger.info(
+            "Completed run iterations=%d rows_written=%d output=%s",
+            total_iterations,
+            len(rows),
+            output_path,
+        )
     return rows
 
 
@@ -41,18 +77,31 @@ def run_script(
     output_path: str | Path,
     output_format: str | None = None,
     experiment_name: str | None = None,
+    show_progress: bool | None = None,
+    log_level: str = "INFO",
 ) -> list[dict[str, Any]]:
+    logger = configure_logging(log_level)
+    script_path_obj = Path(script_path)
     config_path_obj = Path(config_path)
     output_path_obj = Path(output_path)
     _clear_registry()
-    _load_script_module(Path(script_path))
+    _load_script_module(script_path_obj)
     experiment = _resolve_experiment(experiment_name)
+    logger.info(
+        "Starting run script=%s config=%s output=%s experiment=%s",
+        script_path_obj,
+        config_path_obj,
+        output_path_obj,
+        experiment.name,
+    )
     return run_registered_experiment(
         experiment.fn,
         variables=experiment.variables,
         config_path=config_path_obj,
         output_path=output_path_obj,
         output_format=output_format,
+        show_progress=show_progress,
+        logger=logger,
     )
 
 
@@ -112,27 +161,103 @@ def _resolve_experiment(experiment_name: str | None) -> ExperimentSpec:
 
 
 def build_rows(
-    fn: Callable[..., Any], *, variables: list[str] | None, config: dict[str, Any]
+    fn: Callable[..., Any],
+    *,
+    variables: list[str] | None,
+    config: dict[str, Any],
+    show_progress: bool | None = None,
+    logger: logging.Logger | None = None,
 ) -> list[dict[str, Any]]:
+    rows, _ = _build_rows_with_stats(
+        fn,
+        variables=variables,
+        config=config,
+        show_progress=show_progress,
+        logger=logger,
+    )
+    return rows
+
+
+def _build_rows_with_stats(
+    fn: Callable[..., Any],
+    *,
+    variables: list[str] | None,
+    config: dict[str, Any],
+    show_progress: bool | None,
+    logger: logging.Logger | None,
+) -> tuple[list[dict[str, Any]], int]:
     variable_specs = _resolve_variables(variables)
     config_vars = _validate_config(config, variable_specs)
     materialized = [
         _materialize_variable(spec, config_vars[spec.name]) for spec in variable_specs
     ]
+    variable_counts = {
+        spec.name: len(materialized_values)
+        for spec, materialized_values in zip(variable_specs, materialized)
+    }
+    total_iterations = math.prod(variable_counts.values())
+    if logger is not None:
+        count_summary = ", ".join(
+            f"{name}={count}" for name, count in sorted(variable_counts.items())
+        )
+        if not count_summary:
+            count_summary = "none"
+        logger.info(
+            "Materialized variables %s total_iterations=%d",
+            count_summary,
+            total_iterations,
+        )
 
     rows: list[dict[str, Any]] = []
-    for combo in itertools.product(*materialized):
-        values: dict[str, Any] = {}
-        meta: dict[str, Any] = {}
-        for spec, (value, metadata) in zip(variable_specs, combo):
-            values[spec.name] = value
-            for key, val in metadata.items():
-                meta[f"{spec.name}__{key}"] = val
-        result = fn(**values)
-        for row in _normalize_result(result):
-            combined = _merge_row(meta, row)
-            rows.append(combined)
-    return rows
+    show_progress_resolved = _resolve_show_progress(show_progress)
+    with tqdm(
+        total=total_iterations,
+        disable=not show_progress_resolved,
+        dynamic_ncols=True,
+    ) as progress:
+        for combo in itertools.product(*materialized):
+            values: dict[str, Any] = {}
+            meta: dict[str, Any] = {}
+            for spec, (value, metadata) in zip(variable_specs, combo):
+                values[spec.name] = value
+                for key, val in metadata.items():
+                    meta[f"{spec.name}__{key}"] = val
+            if show_progress_resolved:
+                progress.set_postfix_str(_format_progress_metadata(meta))
+            result = fn(**values)
+            for row in _normalize_result(result):
+                combined = _merge_row(meta, row)
+                rows.append(combined)
+            progress.update(1)
+    return rows, total_iterations
+
+
+def _parse_log_level(log_level: str) -> int:
+    level = getattr(logging, log_level.upper(), None)
+    if isinstance(level, int):
+        return level
+    return logging.INFO
+
+
+def _resolve_show_progress(show_progress: bool | None) -> bool:
+    if show_progress is not None:
+        return show_progress
+    return sys.stderr.isatty()
+
+
+def _format_progress_metadata(metadata: dict[str, Any]) -> str:
+    if not metadata:
+        return ""
+    parts = [f"{key}={str(value)}" for key, value in sorted(metadata.items())]
+    return _truncate_text(", ".join(parts), _MAX_PROGRESS_TEXT_LENGTH)
+
+
+def _truncate_text(text: str, max_length: int) -> str:
+    if len(text) <= max_length:
+        return text
+    if max_length <= 3:
+        return text[:max_length]
+    return f"{text[: max_length - 3]}..."
 
 
 def _load_config(path: Path) -> dict[str, Any]:

@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .runner import run_script
+from .runner import configure_logging, run_script
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "run":
+        configure_logging(args.log_level)
         script_path = _resolve_script_path(args.script, args.script_flag)
         run_script(
             script_path,
@@ -17,6 +18,8 @@ def main(argv: list[str] | None = None) -> int:
             output_path=Path(args.output),
             output_format=args.format,
             experiment_name=args.experiment,
+            show_progress=args.progress,
+            log_level=args.log_level,
         )
         return 0
     raise SystemExit(f"Unknown command: {args.command}")
@@ -41,6 +44,27 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--experiment",
         help="Experiment function name when script defines multiple experiments",
+    )
+    run_parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+    )
+    progress_group = run_parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Force-enable the iteration progress bar",
+    )
+    progress_group.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_const",
+        const=False,
+        help="Disable the iteration progress bar",
     )
     return parser
 

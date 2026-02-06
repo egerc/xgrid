@@ -4,11 +4,14 @@ import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xgrid import experiment, main as xgrid_main
+from xgrid import experiment, main as xgrid_main, variable
 from xgrid import registry as registry_module
+from xgrid import runner as runner_module
 
 
 class RunnerTests(unittest.TestCase):
@@ -341,6 +344,229 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as exc:
                 xgrid_main(["run", str(script_path), "--output", str(output_path)])
             self.assertEqual(exc.exception.code, 2)
+
+    def test_cli_forwards_progress_and_log_level(self) -> None:
+        with (
+            patch("xgrid.cli.configure_logging") as configure_logging_mock,
+            patch("xgrid.cli.run_script") as run_script_mock,
+        ):
+            code = xgrid_main(
+                [
+                    "run",
+                    "experiment.py",
+                    "--config",
+                    "config.json",
+                    "--output",
+                    "out.jsonl",
+                    "--progress",
+                    "--log-level",
+                    "DEBUG",
+                ]
+            )
+        self.assertEqual(code, 0)
+        configure_logging_mock.assert_called_once_with("DEBUG")
+        run_script_mock.assert_called_once()
+        kwargs = run_script_mock.call_args.kwargs
+        self.assertEqual(kwargs["show_progress"], True)
+        self.assertEqual(kwargs["log_level"], "DEBUG")
+
+    def test_cli_rejects_progress_flag_conflict(self) -> None:
+        with self.assertRaises(SystemExit) as exc:
+            xgrid_main(
+                [
+                    "run",
+                    "experiment.py",
+                    "--config",
+                    "config.json",
+                    "--output",
+                    "out.jsonl",
+                    "--progress",
+                    "--no-progress",
+                ]
+            )
+        self.assertEqual(exc.exception.code, 2)
+
+    def test_build_rows_progress_updates_with_metadata(self) -> None:
+        @variable(name="a")
+        def gen_a(start: int, stop: int):
+            return [(i, {"value": i}) for i in range(start, stop)]
+
+        @variable(name="b")
+        def gen_b(start: int, stop: int):
+            return [(i, {"value": i}) for i in range(start, stop)]
+
+        @experiment(variables=["a", "b"])
+        def run(a: int, b: int):
+            return {"sum": a + b}
+
+        config = {
+            "variables": {
+                "a": {"start": 0, "stop": 2},
+                "b": {"start": 0, "stop": 2},
+            }
+        }
+
+        class DummyProgress:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.updates: list[int] = []
+                self.postfixes: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def set_postfix_str(self, text: str) -> None:
+                self.postfixes.append(text)
+
+            def update(self, value: int) -> None:
+                self.updates.append(value)
+
+        created: list[DummyProgress] = []
+
+        def make_progress(*_args, **kwargs):
+            progress = DummyProgress(**kwargs)
+            created.append(progress)
+            return progress
+
+        with patch("xgrid.runner.tqdm", side_effect=make_progress):
+            rows = runner_module.build_rows(
+                run, variables=["a", "b"], config=config, show_progress=True
+            )
+
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(created), 1)
+        progress = created[0]
+        self.assertEqual(progress.kwargs["total"], 4)
+        self.assertEqual(progress.kwargs["disable"], False)
+        self.assertEqual(sum(progress.updates), 4)
+        self.assertEqual(len(progress.postfixes), 4)
+        self.assertIn("a__value=0", progress.postfixes[0])
+        self.assertIn("b__value=0", progress.postfixes[0])
+
+    def test_build_rows_auto_progress_respects_tty(self) -> None:
+        @variable(name="a")
+        def gen_a(start: int, stop: int):
+            return [(i, {"value": i}) for i in range(start, stop)]
+
+        @experiment(variables=["a"])
+        def run(a: int):
+            return {"value": a}
+
+        config = {"variables": {"a": {"start": 0, "stop": 1}}}
+        disables: list[bool] = []
+
+        class DummyProgress:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def set_postfix_str(self, _text: str) -> None:
+                return None
+
+            def update(self, _value: int) -> None:
+                return None
+
+        def make_progress(*_args, **kwargs):
+            disables.append(kwargs["disable"])
+            return DummyProgress()
+
+        with (
+            patch("xgrid.runner.tqdm", side_effect=make_progress),
+            patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: False)),
+        ):
+            runner_module.build_rows(run, variables=["a"], config=config, show_progress=None)
+        with (
+            patch("xgrid.runner.tqdm", side_effect=make_progress),
+            patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: True)),
+        ):
+            runner_module.build_rows(run, variables=["a"], config=config, show_progress=None)
+
+        self.assertEqual(disables, [True, False])
+
+    def test_run_script_logs_lifecycle_messages(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            script_path = tmp_path / "experiment.py"
+            config_path = tmp_path / "config.json"
+            output_path = tmp_path / "out.jsonl"
+
+            self._write_script(
+                script_path,
+                """
+                from xgrid import experiment, variable
+
+                @variable(name="a")
+                def gen_a(start: int, stop: int):
+                    return [(i, {"value": i}) for i in range(start, stop)]
+
+                @experiment(variables=["a"])
+                def run(a: int):
+                    return {"value": a}
+                """,
+            )
+            self._write_config(config_path, {"a": {"start": 0, "stop": 2}})
+
+            with self.assertLogs("xgrid.runner", level="INFO") as log_context:
+                rows = runner_module.run_script(
+                    script_path,
+                    config_path=config_path,
+                    output_path=output_path,
+                    show_progress=False,
+                    log_level="INFO",
+                )
+
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(
+            any("Starting run" in message for message in log_context.output),
+            msg=log_context.output,
+        )
+        self.assertTrue(
+            any("Materialized variables" in message for message in log_context.output),
+            msg=log_context.output,
+        )
+        self.assertTrue(
+            any("Completed run" in message for message in log_context.output),
+            msg=log_context.output,
+        )
+
+    def test_progress_does_not_change_output_rows(self) -> None:
+        @variable(name="a")
+        def gen_a(start: int, stop: int):
+            return [(i, {"value": i}) for i in range(start, stop)]
+
+        @experiment(variables=["a"])
+        def run(a: int):
+            return [{"value": a}, {"double": a * 2}]
+
+        config = {"variables": {"a": {"start": 0, "stop": 2}}}
+
+        rows_without_progress = runner_module.build_rows(
+            run, variables=["a"], config=config, show_progress=False
+        )
+        class DummyProgress:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def set_postfix_str(self, _text: str) -> None:
+                return None
+
+            def update(self, _value: int) -> None:
+                return None
+
+        with patch("xgrid.runner.tqdm", return_value=DummyProgress()):
+            rows_with_progress = runner_module.build_rows(
+                run, variables=["a"], config=config, show_progress=True
+            )
+
+        self.assertEqual(rows_without_progress, rows_with_progress)
 
     def test_direct_experiment_call_no_cli_side_effects(self) -> None:
         @experiment()
