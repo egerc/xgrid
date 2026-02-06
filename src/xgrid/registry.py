@@ -37,6 +37,19 @@ def variable(
 ) -> Callable[
     [VariableGenerator[P, ValueT, MetaT]], VariableGenerator[P, ValueT, MetaT]
 ]:
+    """Return a decorator that registers a variable generator by name.
+
+    Args:
+        name: Registry key to associate with the decorated variable generator.
+
+    Returns:
+        A decorator that stores the generator in the variable registry and
+        returns the original function unchanged.
+
+    Raises:
+        ValueError: If a variable with the same name is already registered.
+    """
+
     def decorator(
         fn: VariableGenerator[P, ValueT, MetaT],
     ) -> VariableGenerator[P, ValueT, MetaT]:
@@ -51,6 +64,20 @@ def variable(
 def experiment(
     *, variables: list[str] | None = None
 ) -> Callable[[Callable[P, ResultT]], Callable[P, ResultT | ExperimentRows]]:
+    """Return a decorator that registers an experiment function.
+
+    Args:
+        variables: Optional list of variable names that the experiment should
+            run against. When omitted, all registered variables are available.
+
+    Returns:
+        A decorator that registers the experiment metadata and wraps the
+        original callable while preserving its signature.
+
+    Raises:
+        ValueError: If an experiment with the same function name exists.
+    """
+
     def decorator(fn: Callable[P, ResultT]) -> Callable[P, ResultT | ExperimentRows]:
         if fn.__name__ in _EXPERIMENTS:
             raise ValueError(f"Experiment '{fn.__name__}' is already registered")
