@@ -6,17 +6,12 @@
     "requirements_files": []
   },
   "variables": {
-    "generator_a": { "start": 0, "stop": 50, "step": 1 },
-    "generator_b": { "start": 0, "stop": 2, "step": 1 },
-    "generator_c": { "start": 0, "stop": 4, "step": 1 }
+    "a": { "generator": "generator_a", "start": 0, "stop": 50, "step": 1 },
+    "b": { "generator": "generator_b", "start": 0, "stop": 2, "step": 1 },
+    "c": { "generator": "generator_c", "start": 0, "stop": 4, "step": 1 }
   },
   "experiments": {
-    "my_experiment": {
-      "bindings": {
-        "a": "generator_a",
-        "b": "generator_b",
-        "c": "generator_c"
-      }
-    }
+    "main": { "fn": "my_experiment", "bindings": { "a": "a", "b": "b", "c": "c" } },
+    "alt": { "fn": "my_experiment_alt", "bindings": { "a": "a", "b": "b", "c": "c" } }
   }
 }

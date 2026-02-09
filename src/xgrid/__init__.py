@@ -1,5 +1,3 @@
-from .registry import experiment, variable
-
 try:
     from importlib.metadata import version
 
@@ -7,7 +5,7 @@ try:
 except Exception:  # pragma: no cover - package metadata unavailable in tests/source
     __version__ = "0.1.0"
 
-__all__ = ["experiment", "variable", "__version__"]
+__all__ = ["__version__"]
 
 
 def main(argv: list[str] | None = None) -> int:

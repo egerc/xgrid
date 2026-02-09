@@ -70,10 +70,7 @@ def parse_environment_config(
     if backend is not None:
         if not isinstance(backend, str) or backend not in _ALLOWED_BACKENDS - {"none"}:
             allowed = ", ".join(sorted(_ALLOWED_BACKENDS - {"none"}))
-            raise SystemExit(
-                "Config 'environment.backend' must be one of: "
-                f"{allowed}"
-            )
+            raise SystemExit(f"Config 'environment.backend' must be one of: {allowed}")
 
     python_target = entry.get("python")
     if python_target is not None:
@@ -227,7 +224,9 @@ def run_in_prepared_environment(
         env = os.environ.copy()
         src_path = str(project_root / "src")
         existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = src_path if not existing else f"{src_path}{os.pathsep}{existing}"
+        env["PYTHONPATH"] = (
+            src_path if not existing else f"{src_path}{os.pathsep}{existing}"
+        )
         command = [str(prepared.python_executable), "-m", "xgrid", *run_arguments]
         _run_command(command, cwd=project_root, env=env)
         return

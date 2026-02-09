@@ -18,13 +18,9 @@ class CliReproTests(unittest.TestCase):
         path.write_text(
             textwrap.dedent(
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def run(a: int):
                     return {"value": a}
                 """
@@ -35,8 +31,10 @@ class CliReproTests(unittest.TestCase):
         path.write_text(
             json.dumps(
                 {
-                    "variables": {"gen_a": {"start": 0, "stop": stop}},
-                    "experiments": {"run": {"bindings": {"a": "gen_a"}}},
+                    "variables": {
+                        "gen_a": {"generator": "gen_a", "start": 0, "stop": stop}
+                    },
+                    "experiments": {"run": {"fn": "run", "bindings": {"a": "gen_a"}}},
                 }
             )
         )
@@ -67,8 +65,17 @@ class CliReproTests(unittest.TestCase):
             sidecar_path = repro.sidecar_path_for_output(output_path)
             self.assertTrue(sidecar_path.exists())
             payload = json.loads(sidecar_path.read_text())
+            self.assertEqual(payload["schema_version"], 2)
             self.assertEqual(payload["environment"]["backend"], "none")
+            self.assertEqual(
+                payload["run"]["output_template"], str(output_path.resolve())
+            )
             self.assertEqual(payload["run"]["output_path"], str(output_path.resolve()))
+            self.assertEqual(payload["run"]["experiment"]["key"], "run")
+            self.assertEqual(payload["run"]["experiment"]["fn"], "run")
+            self.assertEqual(
+                payload["run"]["experiments"], [{"key": "run", "fn": "run"}]
+            )
 
     def test_rerun_command_is_rejected(self) -> None:
         with self.assertRaises(SystemExit) as exc:
@@ -126,8 +133,12 @@ class CliReproTests(unittest.TestCase):
                 json.dumps(
                     {
                         "environment": {"dependencies": "numpy==2.2.0"},
-                        "variables": {"gen_a": {"start": 0, "stop": 1}},
-                        "experiments": {"run": {"bindings": {"a": "gen_a"}}},
+                        "variables": {
+                            "gen_a": {"generator": "gen_a", "start": 0, "stop": 1}
+                        },
+                        "experiments": {
+                            "run": {"fn": "run", "bindings": {"a": "gen_a"}}
+                        },
                     }
                 )
             )

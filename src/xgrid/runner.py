@@ -6,32 +6,27 @@ import inspect
 import json
 import logging
 import sys
+from types import ModuleType
 import uuid
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, cast
 
 from tqdm import tqdm
-
-from .registry import (
-    ExperimentSpec,
-    VariableSpec,
-    _clear_registry,
-    get_experiment_registry,
-    get_variable_registry,
-)
 
 _LOGGER_NAME = "xgrid.runner"
 _LOG_FORMAT = "%(levelname)s %(message)s"
 _MAX_PROGRESS_TEXT_LENGTH = 120
 _LOG_HANDLER_NAME = "xgrid.runner.stderr"
+_EXPERIMENT_PLACEHOLDER = "{experiment}"
 
 
 @dataclass(frozen=True)
 class BoundVariableSpec:
     argument_name: str
-    variable_name: str
+    variable_key: str
+    generator_name: str
     generator: Callable[..., Iterable[tuple[object, Mapping[str, object]]]]
 
 
@@ -57,16 +52,51 @@ def run_registered_experiment(
     logger: logging.Logger | None = None,
 ) -> list[dict[str, Any]]:
     config = _load_config(config_path)
-    rows, total_iterations = _build_rows_with_stats(
+    experiments = _validate_experiment_entries(config)
+    variables = _validate_variable_entries(config)
+
+    matches = [
+        key for key, entry in experiments.items() if entry.get("fn") == fn.__name__
+    ]
+    if not matches:
+        raise SystemExit(
+            f"Config does not define an experiment for function '{fn.__name__}'"
+        )
+    if len(matches) > 1:
+        available = ", ".join(sorted(matches))
+        raise SystemExit(
+            f"Multiple config experiments reference function '{fn.__name__}'. "
+            f"Available experiments: {available}"
+        )
+    experiment_key = matches[0]
+    experiment_entry = experiments[experiment_key]
+
+    module = sys.modules.get(fn.__module__)
+    if module is None:
+        raise SystemExit(
+            f"Unable to resolve module for experiment function '{fn.__name__}'"
+        )
+
+    _warn_unused_variables(variables=variables, experiments=experiments)
+    bound_variable_specs, config_vars = _resolve_bound_variables(
         fn,
-        config=config,
+        experiment_key=experiment_key,
+        bindings=experiment_entry["bindings"],
+        variables=variables,
+        module=module,
+    )
+    rows, total_iterations = _build_rows_with_stats_from_bound_variables(
+        fn,
+        bound_variable_specs=bound_variable_specs,
+        config_vars=config_vars,
         show_progress=show_progress,
         logger=logger,
     )
     _write_output(rows, output_path=output_path, output_format=output_format)
     if logger is not None:
         logger.info(
-            "Completed run iterations=%d rows_written=%d output=%s",
+            "Completed run experiment=%s iterations=%d rows_written=%d output=%s",
+            experiment_key,
             total_iterations,
             len(rows),
             output_path,
@@ -78,37 +108,76 @@ def run_script(
     script_path: str | Path,
     *,
     config_path: str | Path,
-    output_path: str | Path,
+    output_template: str | Path,
     output_format: str | None = None,
-    experiment_name: str | None = None,
     show_progress: bool | None = None,
     log_level: str = "INFO",
-) -> list[dict[str, Any]]:
+) -> dict[str, list[dict[str, Any]]]:
     logger = configure_logging(log_level)
     script_path_obj = Path(script_path)
     config_path_obj = Path(config_path)
-    output_path_obj = Path(output_path)
-    _clear_registry()
-    _load_script_module(script_path_obj)
-    experiment = _resolve_experiment(experiment_name)
-    logger.info(
-        "Starting run script=%s config=%s output=%s experiment=%s",
-        script_path_obj,
-        config_path_obj,
-        output_path_obj,
-        experiment.name,
-    )
-    return run_registered_experiment(
-        experiment.fn,
-        config_path=config_path_obj,
-        output_path=output_path_obj,
-        output_format=output_format,
-        show_progress=show_progress,
-        logger=logger,
+    output_template_obj = Path(output_template)
+
+    config = _load_config(config_path_obj)
+    experiments = _validate_experiment_entries(config)
+    variables = _validate_variable_entries(config)
+    _enforce_output_template(
+        output_template=output_template_obj,
+        experiments=experiments,
     )
 
+    module = _load_script_module(script_path_obj)
 
-def _load_script_module(script_path: Path) -> None:
+    _warn_unused_variables(variables=variables, experiments=experiments)
+
+    results: dict[str, list[dict[str, Any]]] = {}
+    for experiment_key, experiment_entry in experiments.items():
+        fn_name = experiment_entry["fn"]
+        fn = getattr(module, fn_name, None)
+        if not callable(fn):
+            raise SystemExit(
+                f"Unknown experiment function '{fn_name}' for config experiment '{experiment_key}'"
+            )
+
+        output_path = _resolve_output_path(
+            output_template=output_template_obj,
+            experiment_key=experiment_key,
+        )
+        logger.info(
+            "Starting run script=%s config=%s output=%s experiment_key=%s fn=%s",
+            script_path_obj,
+            config_path_obj,
+            output_path,
+            experiment_key,
+            fn_name,
+        )
+        bound_variable_specs, config_vars = _resolve_bound_variables(
+            fn,
+            experiment_key=experiment_key,
+            bindings=experiment_entry["bindings"],
+            variables=variables,
+            module=module,
+        )
+        rows, total_iterations = _build_rows_with_stats_from_bound_variables(
+            fn,
+            bound_variable_specs=bound_variable_specs,
+            config_vars=config_vars,
+            show_progress=show_progress,
+            logger=logger,
+        )
+        _write_output(rows, output_path=output_path, output_format=output_format)
+        logger.info(
+            "Completed run experiment_key=%s iterations=%d rows_written=%d output=%s",
+            experiment_key,
+            total_iterations,
+            len(rows),
+            output_path,
+        )
+        results[experiment_key] = rows
+    return results
+
+
+def _load_script_module(script_path: Path) -> ModuleType:
     resolved_script = script_path.expanduser().resolve()
     if not resolved_script.exists():
         raise SystemExit(f"Script not found: {resolved_script}")
@@ -137,56 +206,70 @@ def _load_script_module(script_path: Path) -> None:
                 sys.path.remove(added_path)
             except ValueError:
                 pass
-
-
-def _resolve_experiment(experiment_name: str | None) -> ExperimentSpec:
-    experiments = get_experiment_registry()
-    if not experiments:
-        raise SystemExit("No experiments registered. Use the @experiment decorator.")
-
-    available_names = sorted(experiments.keys())
-    if experiment_name is not None:
-        experiment = experiments.get(experiment_name)
-        if experiment is None:
-            available = ", ".join(available_names)
-            raise SystemExit(
-                f"Unknown experiment '{experiment_name}'. Available experiments: {available}"
-            )
-        return experiment
-
-    if len(experiments) == 1:
-        return experiments[available_names[0]]
-
-    available = ", ".join(available_names)
-    raise SystemExit(
-        f"Multiple experiments found. Provide --experiment. Available experiments: {available}"
-    )
+    return module
 
 
 def build_rows(
     fn: Callable[..., Any],
     *,
     config: dict[str, Any],
+    experiment_key: str | None = None,
+    module: object | None = None,
     show_progress: bool | None = None,
     logger: logging.Logger | None = None,
 ) -> list[dict[str, Any]]:
-    rows, _ = _build_rows_with_stats(
+    experiments = _validate_experiment_entries(config)
+    variables = _validate_variable_entries(config)
+    _warn_unused_variables(variables=variables, experiments=experiments)
+
+    selected_key: str
+    if experiment_key is not None:
+        if experiment_key not in experiments:
+            available = ", ".join(sorted(experiments.keys()))
+            raise SystemExit(
+                f"Unknown experiment '{experiment_key}'. Available experiments: {available}"
+            )
+        selected_key = experiment_key
+        entry = experiments[selected_key]
+        if entry.get("fn") != fn.__name__:
+            raise SystemExit(
+                f"Config experiment '{selected_key}' references function '{entry.get('fn')}', "
+                f"but build_rows was given '{fn.__name__}'"
+            )
+    else:
+        matches = [
+            key for key, entry in experiments.items() if entry.get("fn") == fn.__name__
+        ]
+        if not matches:
+            raise SystemExit(
+                f"Config does not define an experiment for function '{fn.__name__}'"
+            )
+        if len(matches) > 1:
+            available = ", ".join(sorted(matches))
+            raise SystemExit(
+                f"Multiple config experiments reference function '{fn.__name__}'. "
+                f"Available experiments: {available}"
+            )
+        selected_key = matches[0]
+        entry = experiments[selected_key]
+
+    resolved_module: object
+    if module is None:
+        resolved_module = sys.modules.get(fn.__module__)
+        if resolved_module is None:
+            raise SystemExit(
+                f"Unable to resolve module for experiment function '{fn.__name__}'"
+            )
+    else:
+        resolved_module = module
+
+    bound_variable_specs, config_vars = _resolve_bound_variables(
         fn,
-        config=config,
-        show_progress=show_progress,
-        logger=logger,
+        experiment_key=selected_key,
+        bindings=entry["bindings"],
+        variables=variables,
+        module=resolved_module,
     )
-    return rows
-
-
-def _build_rows_with_stats(
-    fn: Callable[..., Any],
-    *,
-    config: dict[str, Any],
-    show_progress: bool | None,
-    logger: logging.Logger | None,
-) -> tuple[list[dict[str, Any]], int]:
-    bound_variable_specs, config_vars = _resolve_bound_variables(fn, config)
     show_progress_resolved = _resolve_show_progress(show_progress)
     progress_total: int | None = None
     if show_progress_resolved:
@@ -197,7 +280,7 @@ def _build_rows_with_stats(
     if logger is not None:
         variable_summary = (
             ", ".join(
-                f"{spec.argument_name}->{spec.variable_name}"
+                f"{spec.argument_name}->{spec.variable_key}"
                 for spec in bound_variable_specs
             )
             or "none"
@@ -233,7 +316,7 @@ def _build_rows_with_stats(
                 rows.append(combined)
             iteration_count += 1
             progress.update(1)
-    return rows, iteration_count
+    return rows
 
 
 def _parse_log_level(log_level: str) -> int:
@@ -273,84 +356,109 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise SystemExit(f"Invalid JSON in config: {path}") from exc
 
 
-def _resolve_variables() -> dict[str, VariableSpec[object, object]]:
-    registry = get_variable_registry()
-    if not registry:
-        raise SystemExit("No variables registered. Use the @variable decorator.")
-    return registry
+def _validate_variable_entries(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    variables = config.get("variables")
+    if not isinstance(variables, dict):
+        raise SystemExit("Config must contain a 'variables' object")
+
+    typed_vars: dict[str, dict[str, Any]] = {}
+    for variable_key, entry in variables.items():
+        if not isinstance(entry, dict):
+            raise SystemExit(f"Config for variable '{variable_key}' must be an object")
+        generator = entry.get("generator")
+        if not isinstance(generator, str) or not generator.strip():
+            raise SystemExit(
+                f"Config must define non-empty string 'variables.{variable_key}.generator'"
+            )
+        typed_vars[variable_key] = dict(entry)
+    return typed_vars
+
+
+def _validate_experiment_entries(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    experiments = config.get("experiments")
+    if not isinstance(experiments, dict):
+        raise SystemExit("Config must contain an 'experiments' object")
+    if not experiments:
+        raise SystemExit(
+            "Config must define at least one experiment under 'experiments'"
+        )
+
+    typed_experiments: dict[str, dict[str, Any]] = {}
+    for experiment_key, entry in experiments.items():
+        if not isinstance(entry, dict):
+            raise SystemExit(
+                f"Config for experiment '{experiment_key}' must be an object"
+            )
+        fn_name = entry.get("fn")
+        if not isinstance(fn_name, str) or not fn_name.strip():
+            raise SystemExit(
+                f"Config must define non-empty string 'experiments.{experiment_key}.fn'"
+            )
+        bindings = entry.get("bindings")
+        if not isinstance(bindings, dict):
+            raise SystemExit(
+                f"Config must define object 'experiments.{experiment_key}.bindings'"
+            )
+        typed_experiments[experiment_key] = {
+            "fn": fn_name.strip(),
+            "bindings": dict(bindings),
+        }
+    return typed_experiments
 
 
 def _resolve_bound_variables(
-    fn: Callable[..., Any], config: dict[str, Any]
+    fn: Callable[..., Any],
+    *,
+    experiment_key: str,
+    bindings: dict[str, Any],
+    variables: dict[str, dict[str, Any]],
+    module: object,
 ) -> tuple[list[BoundVariableSpec], dict[str, dict[str, Any]]]:
-    variable_registry = _resolve_variables()
-    variable_configs = _validate_variable_configs(config)
-    bindings = _validate_experiment_bindings(fn, config=config)
-
-    extra = [
-        name for name in variable_configs.keys() if name not in set(bindings.values())
-    ]
-    if extra:
-        warnings.warn(f"Unknown variables in config: {', '.join(extra)}", stacklevel=2)
+    typed_bindings = _validate_experiment_bindings(
+        fn,
+        experiment_key=experiment_key,
+        bindings=bindings,
+    )
 
     bound_variable_specs: list[BoundVariableSpec] = []
     config_vars: dict[str, dict[str, Any]] = {}
-    for argument_name, variable_name in bindings.items():
-        variable_spec = variable_registry.get(variable_name)
-        if variable_spec is None:
+    for argument_name, variable_key in typed_bindings.items():
+        variable_entry = variables.get(variable_key)
+        if variable_entry is None:
             raise SystemExit(
-                f"Unknown variable '{variable_name}' bound to argument "
-                f"'{argument_name}' for experiment '{fn.__name__}'"
+                f"Unknown variable '{variable_key}' bound to argument '{argument_name}' "
+                f"for experiment '{experiment_key}'"
             )
-        variable_config = variable_configs.get(variable_name)
-        if variable_config is None:
+        generator_name = str(variable_entry.get("generator"))
+        generator_obj = getattr(module, generator_name, None)
+        if not callable(generator_obj):
             raise SystemExit(
-                f"Missing variable configs: {variable_name} (bound to argument "
-                f"'{argument_name}' in experiment '{fn.__name__}')"
+                f"Unknown generator function '{generator_name}' for variable '{variable_key}' "
+                f"(experiment '{experiment_key}')"
             )
+        generator = cast(
+            Callable[..., Iterable[tuple[object, Mapping[str, object]]]],
+            generator_obj,
+        )
+        variable_kwargs = {
+            key: value for key, value in variable_entry.items() if key != "generator"
+        }
         bound_variable_specs.append(
             BoundVariableSpec(
                 argument_name=argument_name,
-                variable_name=variable_name,
-                generator=variable_spec.generator,
+                variable_key=variable_key,
+                generator_name=generator_name,
+                generator=generator,
             )
         )
-        config_vars[argument_name] = variable_config
+        config_vars[argument_name] = variable_kwargs
 
     return bound_variable_specs, config_vars
 
 
-def _validate_variable_configs(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    variables = config.get("variables")
-    if not isinstance(variables, dict):
-        raise SystemExit("Config must contain a 'variables' object")
-    typed_vars: dict[str, dict[str, Any]] = {}
-    for variable_name, entry in variables.items():
-        if not isinstance(entry, dict):
-            raise SystemExit(f"Config for variable '{variable_name}' must be an object")
-        typed_vars[variable_name] = entry
-    return typed_vars
-
-
 def _validate_experiment_bindings(
-    fn: Callable[..., Any], *, config: dict[str, Any]
+    fn: Callable[..., Any], *, experiment_key: str, bindings: dict[str, Any]
 ) -> dict[str, str]:
-    experiments = config.get("experiments")
-    if not isinstance(experiments, dict):
-        raise SystemExit("Config must contain an 'experiments' object")
-
-    experiment_config = experiments.get(fn.__name__)
-    if not isinstance(experiment_config, dict):
-        raise SystemExit(
-            f"Config must define object 'experiments.{fn.__name__}' for selected experiment"
-        )
-
-    bindings = experiment_config.get("bindings")
-    if not isinstance(bindings, dict):
-        raise SystemExit(
-            f"Config must define object 'experiments.{fn.__name__}.bindings'"
-        )
-
     signature = inspect.signature(fn)
     bindable_parameters: list[str] = []
     required_parameters: list[str] = []
@@ -368,14 +476,14 @@ def _validate_experiment_bindings(
     unknown_bindings = [key for key in bindings.keys() if key not in bindable_set]
     if unknown_bindings:
         raise SystemExit(
-            f"Unknown bindings for experiment '{fn.__name__}': "
+            f"Unknown bindings for experiment '{experiment_key}': "
             f"{', '.join(sorted(unknown_bindings))}"
         )
 
     missing_required = [name for name in required_parameters if name not in bindings]
     if missing_required:
         raise SystemExit(
-            f"Missing bindings for experiment '{fn.__name__}': "
+            f"Missing bindings for experiment '{experiment_key}': "
             f"{', '.join(missing_required)}"
         )
 
@@ -387,7 +495,7 @@ def _validate_experiment_bindings(
         if not isinstance(variable_name, str) or not variable_name.strip():
             raise SystemExit(
                 f"Binding for argument '{parameter_name}' in experiment "
-                f"'{fn.__name__}' must be a non-empty string"
+                f"'{experiment_key}' must be a non-empty string"
             )
         typed_bindings[parameter_name] = variable_name
     return typed_bindings
@@ -400,7 +508,7 @@ def _iter_variable(
     for item in spec.generator(**kwargs):
         if not isinstance(item, tuple) or len(item) != 2:
             raise SystemExit(
-                f"Variable '{spec.variable_name}' bound to argument "
+                f"Variable '{spec.variable_key}' bound to argument "
                 f"'{spec.argument_name}' must yield (value, metadata)"
             )
         value, metadata = item
@@ -408,10 +516,101 @@ def _iter_variable(
             metadata = {}
         if not isinstance(metadata, dict):
             raise SystemExit(
-                f"Metadata for variable '{spec.variable_name}' bound to argument "
+                f"Metadata for variable '{spec.variable_key}' bound to argument "
                 f"'{spec.argument_name}' must be a dict"
             )
         yield value, metadata
+
+
+def _enforce_output_template(
+    *,
+    output_template: Path,
+    experiments: dict[str, dict[str, Any]],
+) -> None:
+    if len(experiments) > 1 and _EXPERIMENT_PLACEHOLDER not in str(output_template):
+        raise SystemExit(
+            "Multiple experiments in config require --output to include '{experiment}'."
+        )
+
+
+def _resolve_output_path(*, output_template: Path, experiment_key: str) -> Path:
+    return Path(str(output_template).replace(_EXPERIMENT_PLACEHOLDER, experiment_key))
+
+
+def _warn_unused_variables(
+    *,
+    variables: dict[str, dict[str, Any]],
+    experiments: dict[str, dict[str, Any]],
+) -> None:
+    referenced: set[str] = set()
+    for entry in experiments.values():
+        bindings = entry.get("bindings")
+        if not isinstance(bindings, dict):
+            continue
+        for value in bindings.values():
+            if isinstance(value, str) and value.strip():
+                referenced.add(value)
+
+    extra = [key for key in variables.keys() if key not in referenced]
+    if extra:
+        warnings.warn(f"Unknown variables in config: {', '.join(extra)}", stacklevel=2)
+
+
+def _build_rows_with_stats_from_bound_variables(
+    fn: Callable[..., Any],
+    *,
+    bound_variable_specs: list[BoundVariableSpec],
+    config_vars: dict[str, dict[str, Any]],
+    show_progress: bool | None,
+    logger: logging.Logger | None,
+) -> tuple[list[dict[str, Any]], int]:
+    show_progress_resolved = _resolve_show_progress(show_progress)
+    progress_total: int | None = None
+    if show_progress_resolved:
+        progress_total = _compute_total_iterations(
+            bound_variable_specs=bound_variable_specs,
+            config_vars=config_vars,
+        )
+    if logger is not None:
+        variable_summary = (
+            ", ".join(
+                f"{spec.argument_name}->{spec.variable_key}"
+                for spec in bound_variable_specs
+            )
+            or "none"
+        )
+        if progress_total is None:
+            logger.info(
+                "Initialized lazy variable iteration variables=%s total_iterations=unknown",
+                variable_summary,
+            )
+        else:
+            logger.info(
+                "Initialized lazy variable iteration variables=%s total_iterations=%d",
+                variable_summary,
+                progress_total,
+            )
+
+    rows: list[dict[str, Any]] = []
+    iteration_count = 0
+    with tqdm(
+        total=progress_total,
+        disable=not show_progress_resolved,
+        dynamic_ncols=True,
+    ) as progress:
+        for values, meta in _iter_variable_combinations(
+            bound_variable_specs=bound_variable_specs,
+            config_vars=config_vars,
+        ):
+            if show_progress_resolved:
+                progress.set_postfix_str(_format_progress_metadata(meta))
+            result = fn(**values)
+            for row in _normalize_result(result):
+                combined = _merge_row(meta, row)
+                rows.append(combined)
+            iteration_count += 1
+            progress.update(1)
+    return rows, iteration_count
 
 
 def _count_variable_items(spec: BoundVariableSpec, config: dict[str, Any]) -> int:

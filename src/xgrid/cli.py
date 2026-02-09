@@ -36,10 +36,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format", choices=["csv", "jsonl", "parquet"], default=None
     )
     run_parser.add_argument(
-        "--experiment",
-        help="Experiment function name when script defines multiple experiments",
-    )
-    run_parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
@@ -101,13 +97,14 @@ def _resolve_script_path(
 
 
 def _handle_run_command(args: argparse.Namespace) -> int:
-    script_path = _resolve_script_path(args.script, args.script_flag).expanduser().resolve()
+    script_path = (
+        _resolve_script_path(args.script, args.script_flag).expanduser().resolve()
+    )
     context = repro.RunContext(
         script_path=script_path,
         config_path=Path(args.config).expanduser().resolve(),
-        output_path=Path(args.output).expanduser().resolve(),
+        output_template=Path(args.output).expanduser().resolve(),
         output_format=args.format,
-        experiment_name=args.experiment,
         show_progress=args.progress,
         log_level=args.log_level,
     )
@@ -116,15 +113,19 @@ def _handle_run_command(args: argparse.Namespace) -> int:
         run_script(
             context.script_path,
             config_path=context.config_path,
-            output_path=context.output_path,
+            output_template=context.output_template,
             output_format=context.output_format,
-            experiment_name=context.experiment_name,
             show_progress=context.show_progress,
             log_level=context.log_level,
         )
         return 0
 
     config = _load_config(context.config_path)
+    experiments = _parse_experiments(config)
+    if len(experiments) > 1 and "{experiment}" not in str(context.output_template):
+        raise SystemExit(
+            "Multiple experiments in config require --output to include '{experiment}'."
+        )
     parsed_environment = environment_module.parse_environment_config(
         config,
         config_path=context.config_path,
@@ -146,6 +147,7 @@ def _handle_run_command(args: argparse.Namespace) -> int:
         rebuild_env=args.rebuild_env,
         refresh_lock=args.refresh_lock,
         normalized_argv=normalized_argv,
+        experiments=experiments,
     )
 
 
@@ -157,6 +159,7 @@ def _execute_run_with_environment(
     rebuild_env: bool,
     refresh_lock: bool,
     normalized_argv: list[str],
+    experiments: dict[str, str],
 ) -> int:
     logger = configure_logging(context.log_level)
     project_root = Path.cwd().resolve()
@@ -186,9 +189,8 @@ def _execute_run_with_environment(
         run_script(
             context.script_path,
             config_path=context.config_path,
-            output_path=context.output_path,
+            output_template=context.output_template,
             output_format=context.output_format,
-            experiment_name=context.experiment_name,
             show_progress=context.show_progress,
             log_level=context.log_level,
         )
@@ -204,20 +206,40 @@ def _execute_run_with_environment(
             run_arguments=run_arguments,
         )
 
-    manifest_path = repro.write_run_manifest(
-        context=context,
-        selected_backend=selected_backend,
-        environment_fingerprint=prepared.fingerprint,
-        lock_fingerprint=(
-            prepared.lock_material.fingerprint if prepared.lock_material else None
-        ),
-        lock_material=(prepared.lock_material.content if prepared.lock_material else None),
-        python_version=prepared.python_version,
-        environment_status=prepared.status,
-        xgrid_version=__version__,
-        normalized_cli_argv=normalized_argv,
-    )
-    logger.info("Wrote run manifest path=%s", manifest_path)
+    manifest_paths: list[Path] = []
+    all_experiments = [
+        {"key": key, "fn": fn_name} for key, fn_name in experiments.items()
+    ]
+    for experiment_key, experiment_fn in experiments.items():
+        output_path = Path(
+            str(context.output_template).replace("{experiment}", experiment_key)
+        )
+        manifest_paths.append(
+            repro.write_run_manifest(
+                context=context,
+                output_path=output_path,
+                output_template=context.output_template,
+                experiment_key=experiment_key,
+                experiment_fn=experiment_fn,
+                experiments=all_experiments,
+                selected_backend=selected_backend,
+                environment_fingerprint=prepared.fingerprint,
+                lock_fingerprint=(
+                    prepared.lock_material.fingerprint
+                    if prepared.lock_material
+                    else None
+                ),
+                lock_material=(
+                    prepared.lock_material.content if prepared.lock_material else None
+                ),
+                python_version=prepared.python_version,
+                environment_status=prepared.status,
+                xgrid_version=__version__,
+                normalized_cli_argv=normalized_argv,
+            )
+        )
+    for manifest_path in manifest_paths:
+        logger.info("Wrote run manifest path=%s", manifest_path)
     return 0
 
 
@@ -229,7 +251,7 @@ def _build_managed_run_arguments(
 ) -> list[str]:
     script_path = context.script_path
     config_path = context.config_path
-    output_path = context.output_path
+    output_template = context.output_template
     if backend == "docker":
         script_path = environment_module.rewrite_path_for_docker(
             script_path,
@@ -239,8 +261,8 @@ def _build_managed_run_arguments(
             config_path,
             project_root=project_root,
         )
-        output_path = environment_module.rewrite_path_for_docker(
-            output_path,
+        output_template = environment_module.rewrite_path_for_docker(
+            output_template,
             project_root=project_root,
         )
 
@@ -250,15 +272,13 @@ def _build_managed_run_arguments(
         "--config",
         str(config_path),
         "--output",
-        str(output_path),
+        str(output_template),
         "--log-level",
         context.log_level,
         "--_in-managed-env",
     ]
     if context.output_format:
         args.extend(["--format", context.output_format])
-    if context.experiment_name:
-        args.extend(["--experiment", context.experiment_name])
     if context.show_progress is True:
         args.append("--progress")
     if context.show_progress is False:
@@ -279,7 +299,7 @@ def _normalized_run_argv(
         "--config",
         str(context.config_path),
         "--output",
-        str(context.output_path),
+        str(context.output_template),
         "--log-level",
         context.log_level,
         "--env-backend",
@@ -287,8 +307,6 @@ def _normalized_run_argv(
     ]
     if context.output_format:
         args.extend(["--format", context.output_format])
-    if context.experiment_name:
-        args.extend(["--experiment", context.experiment_name])
     if context.show_progress is True:
         args.append("--progress")
     if context.show_progress is False:
@@ -298,6 +316,35 @@ def _normalized_run_argv(
     if refresh_lock:
         args.append("--refresh-lock")
     return args
+
+
+def _parse_experiments(config: dict[str, Any]) -> dict[str, str]:
+    experiments = config.get("experiments")
+    if not isinstance(experiments, dict):
+        raise SystemExit("Config must contain an 'experiments' object")
+    if not experiments:
+        raise SystemExit(
+            "Config must define at least one experiment under 'experiments'"
+        )
+
+    parsed: dict[str, str] = {}
+    for experiment_key, entry in experiments.items():
+        if not isinstance(entry, dict):
+            raise SystemExit(
+                f"Config for experiment '{experiment_key}' must be an object"
+            )
+        fn_name = entry.get("fn")
+        if not isinstance(fn_name, str) or not fn_name.strip():
+            raise SystemExit(
+                f"Config must define non-empty string 'experiments.{experiment_key}.fn'"
+            )
+        bindings = entry.get("bindings")
+        if not isinstance(bindings, dict):
+            raise SystemExit(
+                f"Config must define object 'experiments.{experiment_key}.bindings'"
+            )
+        parsed[experiment_key] = fn_name.strip()
+    return parsed
 
 
 def _load_config(path: Path) -> dict[str, Any]:

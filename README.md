@@ -37,13 +37,13 @@ cp config.example.json config.json
 2. Run the showcase and write CSV output:
 
 ```bash
-uv run xgrid run showcase.py --config config.json --output results.csv
+uv run xgrid run showcase.py --config config.json --output results_{experiment}.csv
 ```
 
 3. Run the same showcase and write JSONL output:
 
 ```bash
-uv run xgrid run showcase.py --config config.json --output results.jsonl
+uv run xgrid run showcase.py --config config.json --output results_{experiment}.jsonl
 ```
 
 Outputs are written to the path passed to `--output` (for example, `results.csv` or `results.jsonl` in the current directory).
@@ -51,25 +51,17 @@ Each run also writes a reproducibility sidecar at `<output>.run.json` (for examp
 
 ## Writing an Experiment Script
 
-Use `@variable` to register variable generators by function name and `@experiment` to register the experiment function.
-
 ```python
-from xgrid import experiment, variable
-
-
-@variable
 def gen_a(start: int, stop: int, step: int = 1):
     for i in range(start, stop, step):
         yield i, {"value": i}
 
 
-@variable
 def gen_b(start: int, stop: int):
     for i in range(start, stop):
         yield i, {"value": i}
 
 
-@experiment
 def run(a: int, b: int):
     return {"sum": a + b}
 ```
@@ -85,8 +77,10 @@ Notes:
 
 Config files are JSON objects with top-level `variables` and `experiments` objects.  
 They may also include an optional top-level `environment` object.
-- `variables.<generator_function_name>` maps to keyword arguments passed to that generator.
-- `experiments.<experiment_function_name>.bindings` maps experiment argument names to generator function names.
+- `variables.<variable_key>.generator` selects the generator function name in your script module.
+- `variables.<variable_key>` additional fields map to keyword arguments passed to that generator.
+- `experiments.<experiment_key>.fn` selects the experiment function name in your script module.
+- `experiments.<experiment_key>.bindings` maps experiment argument names to variable keys.
 - `environment` controls managed runtime setup for environment reuse.
 
 ```json
@@ -101,16 +95,11 @@ They may also include an optional top-level `environment` object.
     }
   },
   "variables": {
-    "gen_a": { "start": 0, "stop": 3, "step": 1 },
-    "gen_b": { "start": 0, "stop": 2 }
+    "a": { "generator": "gen_a", "start": 0, "stop": 3, "step": 1 },
+    "b": { "generator": "gen_b", "start": 0, "stop": 2 }
   },
   "experiments": {
-    "run": {
-      "bindings": {
-        "a": "gen_a",
-        "b": "gen_b"
-      }
-    }
+    "main": { "fn": "run", "bindings": { "a": "a", "b": "b" } }
   }
 }
 ```
@@ -136,7 +125,6 @@ Do not provide both forms at once.
 
 Useful flags:
 - `--format {csv,jsonl,parquet}` to force output format instead of inferring from extension.
-- `--experiment <name>` when the script defines multiple experiments.
 - `--log-level {DEBUG,INFO,WARNING,ERROR}` to control runtime logging verbosity (default: `INFO`).
 - `--progress` to force-enable the in-place progress bar.
 - `--no-progress` to disable the in-place progress bar.
@@ -176,13 +164,12 @@ Parquet output requires `polars` to be available at runtime.
 
 ## Running Multiple Experiments
 
-If your script registers more than one experiment, you must select one with `--experiment`.
+If your config defines multiple experiments under `experiments`, xgrid runs all of them.
+In that case, `--output` must include `{experiment}` so each experiment writes to a distinct file.
 
 ```bash
-xgrid run multi.py --config config.json --output out.jsonl --experiment second
+xgrid run multi.py --config config.json --output out_{experiment}.jsonl
 ```
-
-Without `--experiment`, the CLI exits and lists available experiment names.
 
 ## Common Errors and Fixes
 
@@ -192,15 +179,9 @@ Without `--experiment`, the CLI exits and lists available experiment names.
 - Missing config or output arguments
   - Cause: required CLI flags omitted.
   - Fix: add `--config <file>` and `--output <file>`.
-- No registered variables or experiments
-  - Cause: script did not apply `@variable` or `@experiment`.
-  - Fix: ensure decorators are present and executed during import.
-- Multiple experiments without `--experiment`
-  - Cause: script defines multiple `@experiment` functions.
-  - Fix: pass `--experiment <name>`.
-- Unknown experiment name
-  - Cause: value passed to `--experiment` does not exist.
-  - Fix: use one of the names listed in the error output.
+- Multiple experiments but missing `{experiment}` in `--output`
+  - Cause: config defines more than one experiment and output path would be overwritten.
+  - Fix: use an output template like `results_{experiment}.jsonl`.
 - Invalid config JSON or wrong schema
   - Cause: malformed JSON or missing required `variables` / `experiments.<name>.bindings` objects.
   - Fix: validate JSON and match the documented schema.

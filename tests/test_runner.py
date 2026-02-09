@@ -10,15 +10,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xgrid import experiment, main as xgrid_main, variable
-from xgrid import registry as registry_module
+from xgrid import main as xgrid_main
 from xgrid import runner as runner_module
 
 
 class RunnerTests(unittest.TestCase):
-    def setUp(self) -> None:
-        registry_module._clear_registry()
-
     def _run_cli(self, args: list[str]) -> int:
         effective_args = list(args)
         if (
@@ -42,21 +38,28 @@ class RunnerTests(unittest.TestCase):
         *,
         variables: dict,
         bindings: dict[str, str] | None = None,
-        experiment_names: tuple[str, ...] = ("run", "first", "second"),
+        experiment_names: tuple[str, ...] = ("run",),
     ) -> dict[str, dict]:
+        typed_variables = {
+            variable_key: {"generator": variable_key, **dict(entry)}
+            for variable_key, entry in variables.items()
+        }
         resolved_bindings = (
             bindings
             if bindings is not None
             else {
                 self._argument_name_for_variable(variable_name): variable_name
-                for variable_name in variables.keys()
+                for variable_name in typed_variables.keys()
             }
         )
         experiments = {
-            experiment_name: {"bindings": dict(resolved_bindings)}
+            experiment_name: {
+                "fn": experiment_name,
+                "bindings": dict(resolved_bindings),
+            }
             for experiment_name in experiment_names
         }
-        return {"variables": variables, "experiments": experiments}
+        return {"variables": typed_variables, "experiments": experiments}
 
     def _write_config(
         self,
@@ -64,7 +67,7 @@ class RunnerTests(unittest.TestCase):
         variables: dict,
         *,
         bindings: dict[str, str] | None = None,
-        experiment_names: tuple[str, ...] = ("run", "first", "second"),
+        experiment_names: tuple[str, ...] = ("run",),
     ) -> None:
         path.write_text(
             json.dumps(
@@ -89,17 +92,12 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
-                @variable
                 def gen_b(start: int, stop: int):
                     return [(i, {"value": i}) for i in range(start, stop)]
 
-                @experiment
                 def run(a: int, b: int):
                     return [{"sum": a + b}]
                 """,
@@ -141,13 +139,9 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def run(a: int):
                     return {"value": a}
                 """,
@@ -183,13 +177,9 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def run(a: int):
                     return {"value": a}
                 """,
@@ -212,7 +202,7 @@ class RunnerTests(unittest.TestCase):
             self.assertNotIn("a", header_fields)
             self.assertIn("value", header_fields)
 
-    def test_multiple_experiments_requires_experiment(self) -> None:
+    def test_multiple_experiments_requires_output_placeholder(self) -> None:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             script_path = tmp_path / "experiment.py"
@@ -222,22 +212,21 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
 
-                @experiment
                 def second(a: int):
                     return {"kind": "second", "value": a}
                 """,
             )
-            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
+            self._write_config(
+                config_path,
+                {"gen_a": {"start": 0, "stop": 1}},
+                experiment_names=("first", "second"),
+            )
 
             with self.assertRaises(SystemExit) as exc:
                 self._run_cli(
@@ -251,93 +240,58 @@ class RunnerTests(unittest.TestCase):
                     ]
                 )
             message = str(exc.exception)
-            self.assertIn("Multiple experiments found", message)
-            self.assertIn("first", message)
-            self.assertIn("second", message)
+            self.assertIn("include '{experiment}'", message)
 
-    def test_multiple_experiments_valid_selection(self) -> None:
+    def test_multiple_experiments_write_outputs_from_template(self) -> None:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             script_path = tmp_path / "experiment.py"
             config_path = tmp_path / "config.json"
-            output_path = tmp_path / "out.jsonl"
+            output_template = tmp_path / "out_{experiment}.jsonl"
 
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
 
-                @experiment
                 def second(a: int):
                     return {"kind": "second", "value": a}
                 """,
             )
-            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
+            self._write_config(
+                config_path,
+                {"gen_a": {"start": 0, "stop": 2}},
+                experiment_names=("first", "second"),
+            )
 
-            self._run_cli(
+            code = self._run_cli(
                 [
                     "run",
                     str(script_path),
                     "--config",
                     str(config_path),
                     "--output",
-                    str(output_path),
-                    "--experiment",
-                    "second",
+                    str(output_template),
                 ]
             )
+            self.assertEqual(code, 0)
 
-            rows = [json.loads(line) for line in output_path.read_text().splitlines()]
-            self.assertEqual(len(rows), 2)
-            self.assertTrue(all(row["kind"] == "second" for row in rows))
-
-    def test_unknown_experiment_lists_available(self) -> None:
-        with TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            script_path = tmp_path / "experiment.py"
-            config_path = tmp_path / "config.json"
-            output_path = tmp_path / "out.jsonl"
-
-            self._write_script(
-                script_path,
-                """
-                from xgrid import experiment, variable
-
-                @variable
-                def gen_a(start: int, stop: int):
-                    return [(i, {}) for i in range(start, stop)]
-
-                @experiment
-                def first(a: int):
-                    return {"kind": "first", "value": a}
-                """,
-            )
-            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 1}})
-
-            with self.assertRaises(SystemExit) as exc:
-                self._run_cli(
-                    [
-                        "run",
-                        str(script_path),
-                        "--config",
-                        str(config_path),
-                        "--output",
-                        str(output_path),
-                        "--experiment",
-                        "missing",
-                    ]
-                )
-            message = str(exc.exception)
-            self.assertIn("Unknown experiment", message)
-            self.assertIn("first", message)
+            first_out = tmp_path / "out_first.jsonl"
+            second_out = tmp_path / "out_second.jsonl"
+            first_rows = [
+                json.loads(line) for line in first_out.read_text().splitlines()
+            ]
+            second_rows = [
+                json.loads(line) for line in second_out.read_text().splitlines()
+            ]
+            self.assertEqual(len(first_rows), 2)
+            self.assertEqual(len(second_rows), 2)
+            self.assertTrue(all(row["kind"] == "first" for row in first_rows))
+            self.assertTrue(all(row["kind"] == "second" for row in second_rows))
 
     def test_rejects_both_script_forms(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -349,13 +303,9 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -386,13 +336,9 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_a(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def first(a: int):
                     return {"kind": "first", "value": a}
                 """,
@@ -412,13 +358,9 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_learning_rate(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def run(learning_rate: int):
                     return {"learning_rate": learning_rate}
                 """,
@@ -445,23 +387,6 @@ class RunnerTests(unittest.TestCase):
             rows = [json.loads(line) for line in output_path.read_text().splitlines()]
             self.assertEqual(rows, [{"learning_rate": 0}, {"learning_rate": 1}])
 
-    def test_variable_rejects_duplicate_function_name(self) -> None:
-        @variable
-        def gen_alpha():
-            return [(1, {})]
-
-        self.assertEqual(gen_alpha(), [(1, {})])
-
-        with self.assertRaises(ValueError) as exc:
-
-            @variable
-            def gen_alpha():
-                return [(2, {})]
-
-        self.assertEqual(
-            str(exc.exception), "Variable 'gen_alpha' is already registered"
-        )
-
     def test_run_fails_for_unknown_bound_generator_in_config(self) -> None:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -472,17 +397,12 @@ class RunnerTests(unittest.TestCase):
             self._write_script(
                 script_path,
                 """
-                from xgrid import experiment, variable
-
-                @variable
                 def gen_alpha(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @variable
                 def gen_beta(start: int, stop: int):
                     return [(i, {}) for i in range(start, stop)]
 
-                @experiment
                 def run(alpha: int, beta: int):
                     return {"sum": alpha + beta}
                 """,
@@ -515,11 +435,9 @@ class RunnerTests(unittest.TestCase):
             )
 
     def test_missing_bound_variable_config_mentions_argument_and_variable(self) -> None:
-        @variable
         def gen_learning_rate(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment
         def run(learning_rate: int):
             return {"learning_rate": learning_rate}
 
@@ -530,9 +448,10 @@ class RunnerTests(unittest.TestCase):
                     "variables": {},
                     "experiments": {
                         "run": {
+                            "fn": "run",
                             "bindings": {
                                 "learning_rate": "gen_learning_rate",
-                            }
+                            },
                         }
                     },
                 },
@@ -540,37 +459,45 @@ class RunnerTests(unittest.TestCase):
             )
 
         self.assertIn(
-            "Missing variable configs: gen_learning_rate (bound to argument "
-            "'learning_rate' in experiment 'run')",
+            "Unknown variable 'gen_learning_rate' bound to argument 'learning_rate' "
+            "for experiment 'run'",
             str(exc.exception),
         )
 
     def test_extra_config_warning_uses_variable_names(self) -> None:
-        @variable
         def gen_learning_rate(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment
         def run(learning_rate: int):
             return {"learning_rate": learning_rate}
 
         config = {
             "variables": {
-                "gen_learning_rate": {"start": 0, "stop": 1},
-                "unexpected": {"start": 0, "stop": 1},
+                "gen_learning_rate": {
+                    "generator": "gen_learning_rate",
+                    "start": 0,
+                    "stop": 1,
+                },
+                "unexpected": {"generator": "gen_unexpected", "start": 0, "stop": 1},
             },
             "experiments": {
                 "run": {
+                    "fn": "run",
                     "bindings": {
                         "learning_rate": "gen_learning_rate",
-                    }
+                    },
                 }
             },
         }
 
         with warnings.catch_warnings(record=True) as captured:
             warnings.simplefilter("always")
-            rows = runner_module.build_rows(run, config=config, show_progress=False)
+            rows = runner_module.build_rows(
+                run,
+                config=config,
+                show_progress=False,
+                module=SimpleNamespace(gen_learning_rate=gen_learning_rate),
+            )
 
         self.assertEqual(rows, [{"learning_rate": 0}])
         self.assertEqual(len(captured), 1)
@@ -579,11 +506,9 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_missing_experiments_object_is_rejected(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -599,11 +524,9 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_missing_bindings_object_is_rejected(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -611,8 +534,10 @@ class RunnerTests(unittest.TestCase):
             runner_module.build_rows(
                 run,
                 config={
-                    "variables": {"gen_a": {"start": 0, "stop": 1}},
-                    "experiments": {"run": {}},
+                    "variables": {
+                        "gen_a": {"generator": "gen_a", "start": 0, "stop": 1}
+                    },
+                    "experiments": {"run": {"fn": "run"}},
                 },
                 show_progress=False,
             )
@@ -622,11 +547,9 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_missing_required_binding_is_rejected(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int, b: int):
             return {"sum": a + b}
 
@@ -644,11 +567,9 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(str(exc.exception), "Missing bindings for experiment 'run': b")
 
     def test_unknown_binding_key_is_rejected(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -668,11 +589,9 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_optional_parameter_can_be_unbound(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int, b: int = 5):
             return {"sum": a + b}
 
@@ -684,17 +603,16 @@ class RunnerTests(unittest.TestCase):
                 experiment_names=("run",),
             ),
             show_progress=False,
+            module=SimpleNamespace(gen_a=gen_a),
         )
 
         self.assertEqual(rows, [{"sum": 5}, {"sum": 6}])
 
     def test_duplicate_generator_bindings_expand_independent_axes(self) -> None:
-        @variable
         def gen_a(stop: int):
             for i in range(stop):
                 yield i, {}
 
-        @experiment
         def run(a: int, b: int):
             return {"a": a, "b": b}
 
@@ -706,6 +624,7 @@ class RunnerTests(unittest.TestCase):
                 experiment_names=("run",),
             ),
             show_progress=False,
+            module=SimpleNamespace(gen_a=gen_a),
         )
 
         pairs = {(row["a"], row["b"]) for row in rows}
@@ -728,15 +647,12 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, 2)
 
     def test_build_rows_progress_updates_with_metadata(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @variable
         def gen_b(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int, b: int):
             return {"sum": a + b}
 
@@ -773,7 +689,12 @@ class RunnerTests(unittest.TestCase):
             return progress
 
         with patch("xgrid.runner.tqdm", side_effect=make_progress):
-            rows = runner_module.build_rows(run, config=config, show_progress=True)
+            rows = runner_module.build_rows(
+                run,
+                config=config,
+                show_progress=True,
+                module=SimpleNamespace(gen_a=gen_a, gen_b=gen_b),
+            )
 
         self.assertEqual(len(rows), 4)
         self.assertEqual(len(created), 1)
@@ -786,11 +707,9 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("b__value=0", progress.postfixes[0])
 
     def test_build_rows_zero_length_variable_uses_zero_total(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -821,7 +740,12 @@ class RunnerTests(unittest.TestCase):
             return progress
 
         with patch("xgrid.runner.tqdm", side_effect=make_progress):
-            rows = runner_module.build_rows(run, config=config, show_progress=True)
+            rows = runner_module.build_rows(
+                run,
+                config=config,
+                show_progress=True,
+                module=SimpleNamespace(gen_a=gen_a),
+            )
 
         self.assertEqual(rows, [])
         self.assertEqual(len(created), 1)
@@ -829,11 +753,9 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(sum(created[0].updates), 0)
 
     def test_build_rows_auto_progress_respects_tty(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int):
             return {"value": a}
 
@@ -861,28 +783,39 @@ class RunnerTests(unittest.TestCase):
             patch("xgrid.runner.tqdm", side_effect=make_progress),
             patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: False)),
         ):
-            runner_module.build_rows(run, config=config, show_progress=None)
+            runner_module.build_rows(
+                run,
+                config=config,
+                show_progress=None,
+                module=SimpleNamespace(gen_a=gen_a),
+            )
         with (
             patch("xgrid.runner.tqdm", side_effect=make_progress),
             patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: True)),
         ):
-            runner_module.build_rows(run, config=config, show_progress=None)
+            runner_module.build_rows(
+                run,
+                config=config,
+                show_progress=None,
+                module=SimpleNamespace(gen_a=gen_a),
+            )
 
         self.assertEqual(disables, [True, False])
 
     def test_progress_does_not_change_output_rows(self) -> None:
-        @variable
         def gen_a(start: int, stop: int):
             return [(i, {"value": i}) for i in range(start, stop)]
 
-        @experiment
         def run(a: int):
             return [{"value": a}, {"double": a * 2}]
 
         config = self._make_config(variables={"gen_a": {"start": 0, "stop": 2}})
 
         rows_without_progress = runner_module.build_rows(
-            run, config=config, show_progress=False
+            run,
+            config=config,
+            show_progress=False,
+            module=SimpleNamespace(gen_a=gen_a),
         )
 
         class DummyProgress:
@@ -900,10 +833,14 @@ class RunnerTests(unittest.TestCase):
 
         with patch("xgrid.runner.tqdm", return_value=DummyProgress()):
             rows_with_progress = runner_module.build_rows(
-                run, config=config, show_progress=True
+                run,
+                config=config,
+                show_progress=True,
+                module=SimpleNamespace(gen_a=gen_a),
             )
 
         self.assertEqual(rows_without_progress, rows_with_progress)
+
 
 if __name__ == "__main__":
     unittest.main()

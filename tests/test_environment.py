@@ -19,7 +19,9 @@ class EnvironmentTests(unittest.TestCase):
                     {"environment": "invalid"},
                     config_path=config_path,
                 )
-            self.assertEqual(str(exc.exception), "Config 'environment' must be an object")
+            self.assertEqual(
+                str(exc.exception), "Config 'environment' must be an object"
+            )
 
     def test_select_backend_auto_prefers_config_then_uv_default(self) -> None:
         parsed_with_backend = environment_module.ParsedEnvironmentConfig(
@@ -90,8 +92,12 @@ class EnvironmentTests(unittest.TestCase):
                 requirements_files=(req_path,),
                 docker_base_image="python:3.11-slim",
             )
-            fingerprint_one = environment_module.compute_environment_fingerprint(spec=spec)
-            fingerprint_two = environment_module.compute_environment_fingerprint(spec=spec)
+            fingerprint_one = environment_module.compute_environment_fingerprint(
+                spec=spec
+            )
+            fingerprint_two = environment_module.compute_environment_fingerprint(
+                spec=spec
+            )
             self.assertEqual(fingerprint_one, fingerprint_two)
 
     def test_compute_environment_fingerprint_changes_with_requirements_content(
@@ -108,9 +114,13 @@ class EnvironmentTests(unittest.TestCase):
                 requirements_files=(req_path,),
                 docker_base_image="python:3.11-slim",
             )
-            fingerprint_one = environment_module.compute_environment_fingerprint(spec=spec)
+            fingerprint_one = environment_module.compute_environment_fingerprint(
+                spec=spec
+            )
             req_path.write_text("numpy==2.2.1\n")
-            fingerprint_two = environment_module.compute_environment_fingerprint(spec=spec)
+            fingerprint_two = environment_module.compute_environment_fingerprint(
+                spec=spec
+            )
             self.assertNotEqual(fingerprint_one, fingerprint_two)
 
     def test_compute_environment_fingerprint_changes_with_docker_base_image(
@@ -130,8 +140,12 @@ class EnvironmentTests(unittest.TestCase):
             requirements_files=(),
             docker_base_image="python:3.12-slim",
         )
-        fingerprint_one = environment_module.compute_environment_fingerprint(spec=spec_one)
-        fingerprint_two = environment_module.compute_environment_fingerprint(spec=spec_two)
+        fingerprint_one = environment_module.compute_environment_fingerprint(
+            spec=spec_one
+        )
+        fingerprint_two = environment_module.compute_environment_fingerprint(
+            spec=spec_two
+        )
         self.assertNotEqual(fingerprint_one, fingerprint_two)
 
     def test_materialize_lock_collects_inline_and_file_dependencies(self) -> None:
