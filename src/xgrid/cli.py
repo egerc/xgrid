@@ -8,7 +8,12 @@ from typing import Any
 from . import __version__
 from . import environment as environment_module
 from . import repro
-from .runner import configure_logging, run_script
+from .runner import (
+    configure_logging,
+    resolve_experiment_output_path,
+    run_script,
+    validate_output_template,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,7 +35,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--config", required=True, help="Path to config JSON file")
     run_parser.add_argument(
-        "--output", required=True, help="Output path (.csv, .jsonl, .parquet)"
+        "--output",
+        required=True,
+        help=(
+            "Output file/template or directory. File extensions (.csv, .jsonl, .parquet) "
+            "write a single file (single experiment). Include '{experiment}' to write "
+            "one file per experiment. Otherwise, --output is treated as a directory "
+            "and requires --format."
+        ),
     )
     run_parser.add_argument(
         "--format", choices=["csv", "jsonl", "parquet"], default=None
@@ -122,10 +134,11 @@ def _handle_run_command(args: argparse.Namespace) -> int:
 
     config = _load_config(context.config_path)
     experiments = _parse_experiments(config)
-    if len(experiments) > 1 and "{experiment}" not in str(context.output_template):
-        raise SystemExit(
-            "Multiple experiments in config require --output to include '{experiment}'."
-        )
+    validate_output_template(
+        output_template=context.output_template,
+        experiments=experiments,
+        output_format=context.output_format,
+    )
     parsed_environment = environment_module.parse_environment_config(
         config,
         config_path=context.config_path,
@@ -211,8 +224,10 @@ def _execute_run_with_environment(
         {"key": key, "fn": fn_name} for key, fn_name in experiments.items()
     ]
     for experiment_key, experiment_fn in experiments.items():
-        output_path = Path(
-            str(context.output_template).replace("{experiment}", experiment_key)
+        output_path = resolve_experiment_output_path(
+            output_template=context.output_template,
+            experiment_key=experiment_key,
+            output_format=context.output_format,
         )
         manifest_paths.append(
             repro.write_run_manifest(

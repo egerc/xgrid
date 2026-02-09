@@ -20,6 +20,11 @@ _LOG_FORMAT = "%(levelname)s %(message)s"
 _MAX_PROGRESS_TEXT_LENGTH = 120
 _LOG_HANDLER_NAME = "xgrid.runner.stderr"
 _EXPERIMENT_PLACEHOLDER = "{experiment}"
+_OUTPUT_EXTENSIONS: dict[str, str] = {
+    "csv": ".csv",
+    "jsonl": ".jsonl",
+    "parquet": ".parquet",
+}
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,97 @@ def configure_logging(log_level: str) -> logging.Logger:
     logger.setLevel(_parse_log_level(log_level))
     logger.propagate = False
     return logger
+
+
+def validate_output_template(
+    *,
+    output_template: Path,
+    experiments: Mapping[str, object],
+    output_format: str | None,
+) -> None:
+    """
+    Validate that --output can be resolved for the configured experiments.
+
+    Supported modes:
+    - File template mode: --output contains "{experiment}" and will be expanded per
+      experiment.
+    - Directory mode: --output is a directory (existing dir, or a path without a
+      recognized file extension). Each experiment writes to <dir>/<experiment>.<ext>.
+    - Single-file mode: --output is a single file path (recognized extension). Only
+      allowed when there is exactly one experiment.
+    """
+
+    # Existing directory always means directory mode.
+    if output_template.exists() and output_template.is_dir():
+        if output_format is None:
+            raise SystemExit(
+                "Directory outputs require --format (csv, jsonl, parquet)."
+            )
+        return
+
+    template_str = str(output_template)
+    if _EXPERIMENT_PLACEHOLDER in template_str:
+        return
+
+    suffix = output_template.suffix.lower()
+    if suffix in {".csv", ".jsonl", ".parquet"}:
+        if len(experiments) > 1:
+            raise SystemExit(
+                "Multiple experiments in config require --output to be a directory "
+                "or include '{experiment}'."
+            )
+        return
+
+    # No placeholder and no known extension: treat as directory.
+    if output_format is None:
+        raise SystemExit(
+            "Directory outputs require --format (csv, jsonl, parquet), "
+            "or include an output extension in --output."
+        )
+
+
+def resolve_experiment_output_path(
+    *,
+    output_template: Path,
+    experiment_key: str,
+    output_format: str | None,
+) -> Path:
+    """
+    Resolve the concrete output path for a single experiment.
+
+    Directory mode writes to <output_template>/<experiment_key>.<ext>.
+    Template mode replaces "{experiment}" in the output template.
+    """
+
+    if output_template.exists() and output_template.is_dir():
+        if output_format is None:
+            raise SystemExit(
+                "Directory outputs require --format (csv, jsonl, parquet)."
+            )
+        ext = _OUTPUT_EXTENSIONS.get(output_format)
+        if ext is None:
+            raise SystemExit(f"Unsupported output format: {output_format}")
+        return output_template / f"{experiment_key}{ext}"
+
+    template_str = str(output_template)
+    if _EXPERIMENT_PLACEHOLDER in template_str:
+        return Path(template_str.replace(_EXPERIMENT_PLACEHOLDER, experiment_key))
+
+    suffix = output_template.suffix.lower()
+    if suffix in {".csv", ".jsonl", ".parquet"}:
+        # Single-file mode.
+        return output_template
+
+    # Directory mode (path may not exist yet).
+    if output_format is None:
+        raise SystemExit(
+            "Directory outputs require --format (csv, jsonl, parquet), "
+            "or include an output extension in --output."
+        )
+    ext = _OUTPUT_EXTENSIONS.get(output_format)
+    if ext is None:
+        raise SystemExit(f"Unsupported output format: {output_format}")
+    return output_template / f"{experiment_key}{ext}"
 
 
 def run_registered_experiment(
@@ -121,9 +217,10 @@ def run_script(
     config = _load_config(config_path_obj)
     experiments = _validate_experiment_entries(config)
     variables = _validate_variable_entries(config)
-    _enforce_output_template(
+    validate_output_template(
         output_template=output_template_obj,
         experiments=experiments,
+        output_format=output_format,
     )
 
     module = _load_script_module(script_path_obj)
@@ -139,9 +236,10 @@ def run_script(
                 f"Unknown experiment function '{fn_name}' for config experiment '{experiment_key}'"
             )
 
-        output_path = _resolve_output_path(
+        output_path = resolve_experiment_output_path(
             output_template=output_template_obj,
             experiment_key=experiment_key,
+            output_format=output_format,
         )
         logger.info(
             "Starting run script=%s config=%s output=%s experiment_key=%s fn=%s",
@@ -526,15 +624,25 @@ def _enforce_output_template(
     *,
     output_template: Path,
     experiments: dict[str, dict[str, Any]],
+    output_format: str | None,
 ) -> None:
-    if len(experiments) > 1 and _EXPERIMENT_PLACEHOLDER not in str(output_template):
-        raise SystemExit(
-            "Multiple experiments in config require --output to include '{experiment}'."
-        )
+    # Backwards-compatible alias retained for internal callers.
+    validate_output_template(
+        output_template=output_template,
+        experiments=experiments,
+        output_format=output_format,
+    )
 
 
-def _resolve_output_path(*, output_template: Path, experiment_key: str) -> Path:
-    return Path(str(output_template).replace(_EXPERIMENT_PLACEHOLDER, experiment_key))
+def _resolve_output_path(
+    *, output_template: Path, experiment_key: str, output_format: str | None
+) -> Path:
+    # Backwards-compatible alias retained for internal callers.
+    return resolve_experiment_output_path(
+        output_template=output_template,
+        experiment_key=experiment_key,
+        output_format=output_format,
+    )
 
 
 def _warn_unused_variables(

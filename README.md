@@ -37,17 +37,17 @@ cp config.example.json config.json
 2. Run the showcase and write CSV output:
 
 ```bash
-uv run xgrid run showcase.py --config config.json --output results_{experiment}.csv
+uv run xgrid run showcase.py --config config.json --output results --format csv
 ```
 
 3. Run the same showcase and write JSONL output:
 
 ```bash
-uv run xgrid run showcase.py --config config.json --output results_{experiment}.jsonl
+uv run xgrid run showcase.py --config config.json --output results --format jsonl
 ```
 
-Outputs are written to the path passed to `--output` (for example, `results.csv` or `results.jsonl` in the current directory).
-Each run also writes a reproducibility sidecar at `<output>.run.json` (for example, `results.csv.run.json`).
+Outputs are written under the directory passed to `--output` (for example, `results/run.csv`).
+Each written output file also gets a reproducibility sidecar at `<output>.run.json` (for example, `results/run.csv.run.json`).
 
 ## Writing an Experiment Script
 
@@ -114,7 +114,7 @@ Behavior:
 Canonical form:
 
 ```bash
-xgrid run <script.py> --config <config.json> --output <output_file>
+xgrid run <script.py> --config <config.json> --output <output_dir> --format <fmt>
 ```
 
 You can pass the script path either:
@@ -165,9 +165,10 @@ Parquet output requires `polars` to be available at runtime.
 ## Running Multiple Experiments
 
 If your config defines multiple experiments under `experiments`, xgrid runs all of them.
-In that case, `--output` must include `{experiment}` so each experiment writes to a distinct file.
+To avoid overwriting outputs, you can either write into a directory (recommended), or use an output template.
 
 ```bash
+xgrid run multi.py --config config.json --output out --format jsonl
 xgrid run multi.py --config config.json --output out_{experiment}.jsonl
 ```
 
@@ -181,7 +182,7 @@ xgrid run multi.py --config config.json --output out_{experiment}.jsonl
   - Fix: add `--config <file>` and `--output <file>`.
 - Multiple experiments but missing `{experiment}` in `--output`
   - Cause: config defines more than one experiment and output path would be overwritten.
-  - Fix: use an output template like `results_{experiment}.jsonl`.
+  - Fix: pass a directory output (for example `--output results --format jsonl`) or use an output template like `results_{experiment}.jsonl`.
 - Invalid config JSON or wrong schema
   - Cause: malformed JSON or missing required `variables` / `experiments.<name>.bindings` objects.
   - Fix: validate JSON and match the documented schema.

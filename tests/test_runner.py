@@ -202,12 +202,12 @@ class RunnerTests(unittest.TestCase):
             self.assertNotIn("a", header_fields)
             self.assertIn("value", header_fields)
 
-    def test_multiple_experiments_requires_output_placeholder(self) -> None:
+    def test_multiple_experiments_write_outputs_to_directory(self) -> None:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             script_path = tmp_path / "experiment.py"
             config_path = tmp_path / "config.json"
-            output_path = tmp_path / "out.jsonl"
+            output_dir = tmp_path / "out"
 
             self._write_script(
                 script_path,
@@ -228,19 +228,70 @@ class RunnerTests(unittest.TestCase):
                 experiment_names=("first", "second"),
             )
 
-            with self.assertRaises(SystemExit) as exc:
-                self._run_cli(
-                    [
-                        "run",
-                        str(script_path),
-                        "--config",
-                        str(config_path),
-                        "--output",
-                        str(output_path),
-                    ]
-                )
-            message = str(exc.exception)
-            self.assertIn("include '{experiment}'", message)
+            code = self._run_cli(
+                [
+                    "run",
+                    str(script_path),
+                    "--config",
+                    str(config_path),
+                    "--output",
+                    str(output_dir),
+                    "--format",
+                    "jsonl",
+                ]
+            )
+            self.assertEqual(code, 0)
+
+            first_out = output_dir / "first.jsonl"
+            second_out = output_dir / "second.jsonl"
+            first_rows = [
+                json.loads(line) for line in first_out.read_text().splitlines()
+            ]
+            second_rows = [
+                json.loads(line) for line in second_out.read_text().splitlines()
+            ]
+            self.assertEqual(len(first_rows), 1)
+            self.assertEqual(len(second_rows), 1)
+            self.assertTrue(all(row["kind"] == "first" for row in first_rows))
+            self.assertTrue(all(row["kind"] == "second" for row in second_rows))
+
+    def test_single_experiment_writes_output_to_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            script_path = tmp_path / "experiment.py"
+            config_path = tmp_path / "config.json"
+            output_dir = tmp_path / "out"
+
+            self._write_script(
+                script_path,
+                """
+                def gen_a(start: int, stop: int):
+                    return [(i, {}) for i in range(start, stop)]
+
+                def run(a: int):
+                    return {"value": a}
+                """,
+            )
+            self._write_config(config_path, {"gen_a": {"start": 0, "stop": 2}})
+
+            code = self._run_cli(
+                [
+                    "run",
+                    str(script_path),
+                    "--config",
+                    str(config_path),
+                    "--output",
+                    str(output_dir),
+                    "--format",
+                    "jsonl",
+                ]
+            )
+            self.assertEqual(code, 0)
+
+            out_path = output_dir / "run.jsonl"
+            rows = [json.loads(line) for line in out_path.read_text().splitlines()]
+            self.assertEqual(rows[0]["value"], 0)
+            self.assertEqual(rows[1]["value"], 1)
 
     def test_multiple_experiments_write_outputs_from_template(self) -> None:
         with TemporaryDirectory() as tmp:
