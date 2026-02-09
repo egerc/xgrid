@@ -37,18 +37,12 @@ def write_run_manifest(
     experiment_key: str,
     experiment_fn: str,
     experiments: list[dict[str, str]],
-    selected_backend: str,
-    environment_fingerprint: str | None,
-    lock_fingerprint: str | None,
-    lock_material: str | None,
-    python_version: str,
-    environment_status: str,
     xgrid_version: str,
     normalized_cli_argv: list[str],
 ) -> Path:
     manifest_path = sidecar_path_for_output(output_path)
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": datetime.now(timezone.utc)
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
@@ -67,14 +61,6 @@ def write_run_manifest(
         "hashes": {
             "script_sha256": sha256_file(context.script_path),
             "config_sha256": sha256_file(context.config_path),
-        },
-        "environment": {
-            "backend": selected_backend,
-            "fingerprint": environment_fingerprint,
-            "lock_fingerprint": lock_fingerprint,
-            "python": python_version,
-            "status": environment_status,
-            "lock_material": lock_material,
         },
         "cli": {"argv": normalized_cli_argv},
     }

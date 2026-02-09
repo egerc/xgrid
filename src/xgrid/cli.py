@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from . import environment as environment_module
 from . import repro
 from .runner import (
     configure_logging,
@@ -52,22 +51,6 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
     )
-    run_parser.add_argument(
-        "--env-backend",
-        choices=["auto", "none", "uv"],
-        default="auto",
-        help="Environment backend selection",
-    )
-    run_parser.add_argument(
-        "--rebuild-env",
-        action="store_true",
-        help="Force rebuild of managed environment artifacts",
-    )
-    run_parser.add_argument(
-        "--refresh-lock",
-        action="store_true",
-        help="Recompute lock material before installation/build",
-    )
     progress_group = run_parser.add_mutually_exclusive_group()
     progress_group.add_argument(
         "--progress",
@@ -83,11 +66,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_const",
         const=False,
         help="Disable the iteration progress bar",
-    )
-    run_parser.add_argument(
-        "--_in-managed-env",
-        action="store_true",
-        help=argparse.SUPPRESS,
     )
 
     return parser
@@ -120,109 +98,33 @@ def _handle_run_command(args: argparse.Namespace) -> int:
         show_progress=args.progress,
         log_level=args.log_level,
     )
-    if args._in_managed_env:
-        configure_logging(args.log_level)
-        run_script(
-            context.script_path,
-            config_path=context.config_path,
-            output_template=context.output_template,
-            output_format=context.output_format,
-            show_progress=context.show_progress,
-            log_level=context.log_level,
-        )
-        return 0
 
     config = _load_config(context.config_path)
+    if "environment" in config:
+        raise SystemExit(
+            "Config key 'environment' is no longer supported; remove it."
+        )
     experiments = _parse_experiments(config)
     validate_output_template(
         output_template=context.output_template,
         experiments=experiments,
         output_format=context.output_format,
     )
-    parsed_environment = environment_module.parse_environment_config(
-        config,
-        config_path=context.config_path,
-    )
-    selected_backend = environment_module.select_backend(
-        args.env_backend,
-        parsed_environment=parsed_environment,
-    )
-    normalized_argv = _normalized_run_argv(
-        context=context,
-        selected_backend=selected_backend,
-        rebuild_env=args.rebuild_env,
-        refresh_lock=args.refresh_lock,
-    )
-    return _execute_run_with_environment(
-        context=context,
-        selected_backend=selected_backend,
-        parsed_environment=parsed_environment,
-        rebuild_env=args.rebuild_env,
-        refresh_lock=args.refresh_lock,
-        normalized_argv=normalized_argv,
-        experiments=experiments,
-    )
-
-
-def _execute_run_with_environment(
-    *,
-    context: repro.RunContext,
-    selected_backend: str,
-    parsed_environment: environment_module.ParsedEnvironmentConfig,
-    rebuild_env: bool,
-    refresh_lock: bool,
-    normalized_argv: list[str],
-    experiments: dict[str, str],
-) -> int:
     logger = configure_logging(context.log_level)
-    project_root = Path.cwd().resolve()
-    spec = environment_module.build_environment_spec(
-        selected_backend=selected_backend,
-        parsed_environment=parsed_environment,
+    run_script(
+        context.script_path,
+        config_path=context.config_path,
+        output_template=context.output_template,
+        output_format=context.output_format,
+        show_progress=context.show_progress,
+        log_level=context.log_level,
     )
-    fingerprint: str | None = None
-    if spec is not None:
-        fingerprint = environment_module.compute_environment_fingerprint(spec=spec)
-
-    prepared = environment_module.prepare_environment(
-        project_root=project_root,
-        spec=spec,
-        fingerprint=fingerprint,
-        rebuild=rebuild_env,
-        refresh_lock=refresh_lock,
-    )
-    logger.info(
-        "Environment ready backend=%s status=%s fingerprint=%s",
-        prepared.backend,
-        prepared.status,
-        prepared.fingerprint or "none",
-    )
-
-    if prepared.backend == "none":
-        run_script(
-            context.script_path,
-            config_path=context.config_path,
-            output_template=context.output_template,
-            output_format=context.output_format,
-            show_progress=context.show_progress,
-            log_level=context.log_level,
-        )
-    else:
-        run_arguments = _build_managed_run_arguments(
-            context=context,
-            backend=prepared.backend,
-            project_root=project_root,
-        )
-        environment_module.run_in_prepared_environment(
-            project_root=project_root,
-            prepared=prepared,
-            run_arguments=run_arguments,
-        )
 
     manifest_paths: list[Path] = []
     all_experiments = [
         {"key": key, "fn": fn_name} for key, fn_name in experiments.items()
     ]
+    normalized_argv = _normalized_run_argv(context=context)
     for experiment_key, experiment_fn in experiments.items():
         output_path = resolve_experiment_output_path(
             output_template=context.output_template,
@@ -237,18 +139,6 @@ def _execute_run_with_environment(
                 experiment_key=experiment_key,
                 experiment_fn=experiment_fn,
                 experiments=all_experiments,
-                selected_backend=selected_backend,
-                environment_fingerprint=prepared.fingerprint,
-                lock_fingerprint=(
-                    prepared.lock_material.fingerprint
-                    if prepared.lock_material
-                    else None
-                ),
-                lock_material=(
-                    prepared.lock_material.content if prepared.lock_material else None
-                ),
-                python_version=prepared.python_version,
-                environment_status=prepared.status,
                 xgrid_version=__version__,
                 normalized_cli_argv=normalized_argv,
             )
@@ -258,42 +148,9 @@ def _execute_run_with_environment(
     return 0
 
 
-def _build_managed_run_arguments(
-    *,
-    context: repro.RunContext,
-    backend: str,
-    project_root: Path,
-) -> list[str]:
-    script_path = context.script_path
-    config_path = context.config_path
-    output_template = context.output_template
-
-    args = [
-        "run",
-        str(script_path),
-        "--config",
-        str(config_path),
-        "--output",
-        str(output_template),
-        "--log-level",
-        context.log_level,
-        "--_in-managed-env",
-    ]
-    if context.output_format:
-        args.extend(["--format", context.output_format])
-    if context.show_progress is True:
-        args.append("--progress")
-    if context.show_progress is False:
-        args.append("--no-progress")
-    return args
-
-
 def _normalized_run_argv(
     *,
     context: repro.RunContext,
-    selected_backend: str,
-    rebuild_env: bool,
-    refresh_lock: bool,
 ) -> list[str]:
     args = [
         "run",
@@ -304,8 +161,6 @@ def _normalized_run_argv(
         str(context.output_template),
         "--log-level",
         context.log_level,
-        "--env-backend",
-        selected_backend,
     ]
     if context.output_format:
         args.extend(["--format", context.output_format])
@@ -313,10 +168,6 @@ def _normalized_run_argv(
         args.append("--progress")
     if context.show_progress is False:
         args.append("--no-progress")
-    if rebuild_env:
-        args.append("--rebuild-env")
-    if refresh_lock:
-        args.append("--refresh-lock")
     return args
 
 

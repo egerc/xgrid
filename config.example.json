@@ -1,10 +1,4 @@
 {
-  "environment": {
-    "backend": "uv",
-    "python": "3.11",
-    "dependencies": [],
-    "requirements_files": []
-  },
   "variables": {
     "a": { "generator": "generator_a", "start": 0, "stop": 50, "step": 1 },
     "b": { "generator": "generator_b", "start": 0, "stop": 2, "step": 1 },

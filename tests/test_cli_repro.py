@@ -56,8 +56,6 @@ class CliReproTests(unittest.TestCase):
                     str(config_path),
                     "--output",
                     str(output_path),
-                    "--env-backend",
-                    "none",
                 ]
             )
             self.assertEqual(code, 0)
@@ -65,8 +63,8 @@ class CliReproTests(unittest.TestCase):
             sidecar_path = repro.sidecar_path_for_output(output_path)
             self.assertTrue(sidecar_path.exists())
             payload = json.loads(sidecar_path.read_text())
-            self.assertEqual(payload["schema_version"], 2)
-            self.assertEqual(payload["environment"]["backend"], "none")
+            self.assertEqual(payload["schema_version"], 3)
+            self.assertNotIn("environment", payload)
             self.assertEqual(
                 payload["run"]["output_template"], str(output_path.resolve())
             )
@@ -97,7 +95,7 @@ class CliReproTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("usage: xgrid", completed.stdout)
 
-    def test_run_accepts_env_control_flags(self) -> None:
+    def test_run_rejects_env_control_flags(self) -> None:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             script_path = tmp_path / "experiment.py"
@@ -106,21 +104,20 @@ class CliReproTests(unittest.TestCase):
             self._write_script(script_path)
             self._write_config(config_path)
 
-            code = xgrid_main(
-                [
-                    "run",
-                    str(script_path),
-                    "--config",
-                    str(config_path),
-                    "--output",
-                    str(output_path),
-                    "--env-backend",
-                    "none",
-                    "--rebuild-env",
-                    "--refresh-lock",
-                ]
-            )
-            self.assertEqual(code, 0)
+            with self.assertRaises(SystemExit) as exc:
+                xgrid_main(
+                    [
+                        "run",
+                        str(script_path),
+                        "--config",
+                        str(config_path),
+                        "--output",
+                        str(output_path),
+                        "--env-backend",
+                        "none",
+                    ]
+                )
+            self.assertEqual(exc.exception.code, 2)
 
     def test_invalid_environment_dependencies_type_is_rejected(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -152,13 +149,11 @@ class CliReproTests(unittest.TestCase):
                         str(config_path),
                         "--output",
                         str(output_path),
-                        "--env-backend",
-                        "none",
                     ]
                 )
-            self.assertIn(
-                "environment.dependencies",
+            self.assertEqual(
                 str(exc.exception),
+                "Config key 'environment' is no longer supported; remove it.",
             )
 
 

@@ -7,7 +7,6 @@ xgrid runs parameterized experiments by expanding registered variables into a gr
 ## Prerequisites
 
 - Python 3.11+
-- `uv` (required for managed `uv` environments)
 
 ## Installation
 
@@ -75,21 +74,13 @@ Notes:
 ## Config File Format
 
 Config files are JSON objects with top-level `variables` and `experiments` objects.  
-They may also include an optional top-level `environment` object.
 - `variables.<variable_key>.generator` selects the generator function name in your script module.
 - `variables.<variable_key>` additional fields map to keyword arguments passed to that generator.
 - `experiments.<experiment_key>.fn` selects the experiment function name in your script module.
 - `experiments.<experiment_key>.bindings` maps experiment argument names to variable keys.
-- `environment` controls managed runtime setup for environment reuse.
 
 ```json
 {
-  "environment": {
-    "backend": "uv",
-    "python": "3.11",
-    "dependencies": ["numpy==2.2.0"],
-    "requirements_files": ["requirements.txt"]
-  },
   "variables": {
     "a": { "generator": "gen_a", "start": 0, "stop": 3, "step": 1 },
     "b": { "generator": "gen_b", "start": 0, "stop": 2 }
@@ -103,7 +94,6 @@ They may also include an optional top-level `environment` object.
 Behavior:
 - Missing required bindings or missing bound variable configs cause the run to fail.
 - Extra variables in config are allowed, but produce warnings.
-- If `environment` is omitted and `--env-backend auto` is used, xgrid defaults to `uv`.
 
 ## CLI Usage
 
@@ -124,9 +114,6 @@ Useful flags:
 - `--log-level {DEBUG,INFO,WARNING,ERROR}` to control runtime logging verbosity (default: `INFO`).
 - `--progress` to force-enable the in-place progress bar.
 - `--no-progress` to disable the in-place progress bar.
-- `--env-backend {auto,none,uv}` to choose environment orchestration.
-- `--rebuild-env` to force rebuild of managed environment artifacts.
-- `--refresh-lock` to recompute lock material before installing/building.
 
 Progress behavior:
 - If neither `--progress` nor `--no-progress` is provided, xgrid enables progress only in interactive TTY sessions.
@@ -134,18 +121,6 @@ Progress behavior:
 - With `--progress`, xgrid first performs a counting pre-pass to compute an exact total iteration count for a bounded progress bar.
 - Variable generators should be finite and deterministic for the same config to keep the computed total accurate.
 - Progress-enabled runs invoke variable generators an additional time during the counting pre-pass.
-
-### Managed Environments and Sidecars
-
-- Managed runs use cache path `.xgrid/envs/<fingerprint>/`.
-- The fingerprint includes managed environment backend, Python target, dependencies, and requirements file paths with content hashes.
-- Each successful run writes `<output>.run.json` with:
-  - script/config/output paths
-  - script/config hashes
-  - selected backend and environment fingerprint
-  - lock material and lock fingerprint
-  - python version
-  - normalized CLI argv
 
 ## Output Formats
 

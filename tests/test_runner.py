@@ -16,15 +16,7 @@ from xgrid import runner as runner_module
 
 class RunnerTests(unittest.TestCase):
     def _run_cli(self, args: list[str]) -> int:
-        effective_args = list(args)
-        if (
-            effective_args
-            and effective_args[0] == "run"
-            and "--env-backend" not in effective_args
-            and "--_in-managed-env" not in effective_args
-        ):
-            effective_args.extend(["--env-backend", "none"])
-        return xgrid_main(effective_args)
+        return xgrid_main(list(args))
 
     def _argument_name_for_variable(self, variable_name: str) -> str:
         if variable_name.startswith("gen_"):
