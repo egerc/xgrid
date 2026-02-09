@@ -1,12 +1,11 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/xgrid/__init__.py`: Public API (`experiment`, `variable`) and package `main()` shim.
+- `src/xgrid/__init__.py`: Package `main()` shim and version export.
 - `src/xgrid/__main__.py`: Module entrypoint for `python -m xgrid`.
 - `src/xgrid/cli.py`: Argparse CLI (`xgrid run ...`) including environment and progress flags.
-- `src/xgrid/registry.py`: Variable/experiment decorators and in-memory registries.
-- `src/xgrid/runner.py`: Script loading, config validation, experiment resolution, grid execution, and output writers (`csv`, `jsonl`, `parquet`).
-- `src/xgrid/environment.py`: Managed environment parsing, backend selection, fingerprinting, lock materialization, and uv/docker execution.
+- `src/xgrid/runner/`: Script loading, config validation, experiment resolution, grid execution, and output writers (`csv`, `jsonl`, `parquet`).
+- `src/xgrid/environment/`: Managed environment parsing, backend selection, fingerprinting, lock materialization, and `uv` execution.
 - `src/xgrid/repro.py`: Reproducibility sidecar helpers (`<output>.run.json`) and input hashing.
 - `tests/test_runner.py`: Core CLI and runner execution behavior.
 - `tests/test_environment.py`: Environment parsing/fingerprint/preparation behavior.
@@ -61,7 +60,7 @@ This is a pure-Python project; no build step is required.
 ## Configuration Notes
 - Use `config.json` (local copy) to avoid modifying `config.example.json`.
 - Keep example configs minimal and aligned with current decorator/CLI expectations.
-- Optional top-level `environment` config controls managed backends (`uv`/`docker`) when CLI backend is `auto`.
+- Optional top-level `environment` config controls managed backend (`uv`) when CLI backend is `auto`.
 - Managed environment artifacts are cached under `.xgrid/envs/<fingerprint>/`.
 - Each successful run writes a reproducibility sidecar at `<output>.run.json`.
 - Output format is inferred from `--output` extension unless `--format` is provided explicitly.

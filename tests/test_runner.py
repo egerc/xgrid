@@ -739,7 +739,7 @@ class RunnerTests(unittest.TestCase):
             created.append(progress)
             return progress
 
-        with patch("xgrid.runner.tqdm", side_effect=make_progress):
+        with patch("xgrid.runner.grid.tqdm", side_effect=make_progress):
             rows = runner_module.build_rows(
                 run,
                 config=config,
@@ -790,7 +790,7 @@ class RunnerTests(unittest.TestCase):
             created.append(progress)
             return progress
 
-        with patch("xgrid.runner.tqdm", side_effect=make_progress):
+        with patch("xgrid.runner.grid.tqdm", side_effect=make_progress):
             rows = runner_module.build_rows(
                 run,
                 config=config,
@@ -831,8 +831,11 @@ class RunnerTests(unittest.TestCase):
             return DummyProgress()
 
         with (
-            patch("xgrid.runner.tqdm", side_effect=make_progress),
-            patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: False)),
+            patch("xgrid.runner.grid.tqdm", side_effect=make_progress),
+            patch(
+                "xgrid.runner.grid.sys.stderr",
+                new=SimpleNamespace(isatty=lambda: False),
+            ),
         ):
             runner_module.build_rows(
                 run,
@@ -841,8 +844,11 @@ class RunnerTests(unittest.TestCase):
                 module=SimpleNamespace(gen_a=gen_a),
             )
         with (
-            patch("xgrid.runner.tqdm", side_effect=make_progress),
-            patch("xgrid.runner.sys.stderr", new=SimpleNamespace(isatty=lambda: True)),
+            patch("xgrid.runner.grid.tqdm", side_effect=make_progress),
+            patch(
+                "xgrid.runner.grid.sys.stderr",
+                new=SimpleNamespace(isatty=lambda: True),
+            ),
         ):
             runner_module.build_rows(
                 run,
@@ -882,7 +888,7 @@ class RunnerTests(unittest.TestCase):
             def update(self, _value: int) -> None:
                 return None
 
-        with patch("xgrid.runner.tqdm", return_value=DummyProgress()):
+        with patch("xgrid.runner.grid.tqdm", return_value=DummyProgress()):
             rows_with_progress = runner_module.build_rows(
                 run,
                 config=config,

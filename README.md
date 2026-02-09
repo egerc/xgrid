@@ -8,7 +8,6 @@ xgrid runs parameterized experiments by expanding registered variables into a gr
 
 - Python 3.11+
 - `uv` (required for managed `uv` environments)
-- Optional: Docker (for `--env-backend docker`)
 
 ## Installation
 
@@ -89,10 +88,7 @@ They may also include an optional top-level `environment` object.
     "backend": "uv",
     "python": "3.11",
     "dependencies": ["numpy==2.2.0"],
-    "requirements_files": ["requirements.txt"],
-    "docker": {
-      "base_image": "python:3.11-slim"
-    }
+    "requirements_files": ["requirements.txt"]
   },
   "variables": {
     "a": { "generator": "gen_a", "start": 0, "stop": 3, "step": 1 },
@@ -128,7 +124,7 @@ Useful flags:
 - `--log-level {DEBUG,INFO,WARNING,ERROR}` to control runtime logging verbosity (default: `INFO`).
 - `--progress` to force-enable the in-place progress bar.
 - `--no-progress` to disable the in-place progress bar.
-- `--env-backend {auto,none,uv,docker}` to choose environment orchestration.
+- `--env-backend {auto,none,uv}` to choose environment orchestration.
 - `--rebuild-env` to force rebuild of managed environment artifacts.
 - `--refresh-lock` to recompute lock material before installing/building.
 
@@ -142,7 +138,7 @@ Progress behavior:
 ### Managed Environments and Sidecars
 
 - Managed runs use cache path `.xgrid/envs/<fingerprint>/`.
-- The fingerprint includes managed environment backend, Python target, dependencies, Docker base image, and requirements file paths with content hashes.
+- The fingerprint includes managed environment backend, Python target, dependencies, and requirements file paths with content hashes.
 - Each successful run writes `<output>.run.json` with:
   - script/config/output paths
   - script/config hashes

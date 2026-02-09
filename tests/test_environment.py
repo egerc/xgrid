@@ -25,25 +25,23 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_select_backend_auto_prefers_config_then_uv_default(self) -> None:
         parsed_with_backend = environment_module.ParsedEnvironmentConfig(
-            backend="docker",
+            backend="uv",
             python=None,
             dependencies=(),
             requirements_files=(),
-            docker_base_image=None,
         )
         self.assertEqual(
             environment_module.select_backend(
                 "auto",
                 parsed_environment=parsed_with_backend,
             ),
-            "docker",
+            "uv",
         )
         parsed_without_backend = environment_module.ParsedEnvironmentConfig(
             backend=None,
             python=None,
             dependencies=(),
             requirements_files=(),
-            docker_base_image=None,
         )
         self.assertEqual(
             environment_module.select_backend(
@@ -63,7 +61,6 @@ class EnvironmentTests(unittest.TestCase):
                 python="3.11",
                 dependencies=("pandas==2.2.3",),
                 requirements_files=(req_path,),
-                docker_base_image="python:3.11-slim",
             )
             fingerprint_one = environment_module.compute_environment_fingerprint(
                 spec=spec_one,
@@ -73,7 +70,6 @@ class EnvironmentTests(unittest.TestCase):
                 python="3.11",
                 dependencies=("pandas==2.2.4",),
                 requirements_files=(req_path,),
-                docker_base_image="python:3.11-slim",
             )
             fingerprint_two = environment_module.compute_environment_fingerprint(
                 spec=spec_two,
@@ -90,7 +86,6 @@ class EnvironmentTests(unittest.TestCase):
                 python="3.11",
                 dependencies=("pandas==2.2.3",),
                 requirements_files=(req_path,),
-                docker_base_image="python:3.11-slim",
             )
             fingerprint_one = environment_module.compute_environment_fingerprint(
                 spec=spec
@@ -112,7 +107,6 @@ class EnvironmentTests(unittest.TestCase):
                 python="3.11",
                 dependencies=("pandas==2.2.3",),
                 requirements_files=(req_path,),
-                docker_base_image="python:3.11-slim",
             )
             fingerprint_one = environment_module.compute_environment_fingerprint(
                 spec=spec
@@ -123,30 +117,36 @@ class EnvironmentTests(unittest.TestCase):
             )
             self.assertNotEqual(fingerprint_one, fingerprint_two)
 
-    def test_compute_environment_fingerprint_changes_with_docker_base_image(
-        self,
-    ) -> None:
+    def test_compute_environment_fingerprint_changes_with_python_target(self) -> None:
         spec_one = environment_module.EnvironmentSpec(
-            backend="docker",
             python="3.11",
+            backend="uv",
             dependencies=("pandas==2.2.3",),
             requirements_files=(),
-            docker_base_image="python:3.11-slim",
         )
         spec_two = environment_module.EnvironmentSpec(
-            backend="docker",
             python="3.11",
+            backend="uv",
             dependencies=("pandas==2.2.3",),
             requirements_files=(),
-            docker_base_image="python:3.12-slim",
         )
         fingerprint_one = environment_module.compute_environment_fingerprint(
             spec=spec_one
         )
+        spec_three = environment_module.EnvironmentSpec(
+            backend="uv",
+            python="3.12",
+            dependencies=("pandas==2.2.3",),
+            requirements_files=(),
+        )
         fingerprint_two = environment_module.compute_environment_fingerprint(
             spec=spec_two
         )
-        self.assertNotEqual(fingerprint_one, fingerprint_two)
+        fingerprint_three = environment_module.compute_environment_fingerprint(
+            spec=spec_three
+        )
+        self.assertEqual(fingerprint_one, fingerprint_two)
+        self.assertNotEqual(fingerprint_one, fingerprint_three)
 
     def test_materialize_lock_collects_inline_and_file_dependencies(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -161,7 +161,6 @@ class EnvironmentTests(unittest.TestCase):
                 python="3.11",
                 dependencies=("pandas==2.2.3",),
                 requirements_files=(requirements_path,),
-                docker_base_image="python:3.11-slim",
             )
             lock = environment_module.materialize_lock(
                 project_root=project_root,
@@ -181,11 +180,13 @@ class EnvironmentTests(unittest.TestCase):
                 python="3.11",
                 dependencies=(),
                 requirements_files=(),
-                docker_base_image="python:3.11-slim",
             )
             with (
-                patch("xgrid.environment.shutil.which", return_value="/usr/bin/uv"),
-                patch("xgrid.environment._run_command") as run_command,
+                patch(
+                    "xgrid.environment.backends.uv.shutil.which",
+                    return_value="/usr/bin/uv",
+                ),
+                patch("xgrid.environment.backends.uv.run_command") as run_command,
             ):
                 first = environment_module.prepare_environment(
                     project_root=project_root,
@@ -212,6 +213,34 @@ class EnvironmentTests(unittest.TestCase):
                 )
                 self.assertEqual(second.status, "reuse")
                 run_command.assert_not_called()
+
+    def test_parse_environment_rejects_docker_backend(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text("{}")
+            with self.assertRaises(SystemExit) as exc:
+                environment_module.parse_environment_config(
+                    {"environment": {"backend": "docker"}},
+                    config_path=config_path,
+                )
+            self.assertEqual(
+                str(exc.exception),
+                "Docker backend was removed; use 'uv' or omit environment.backend.",
+            )
+
+    def test_parse_environment_rejects_environment_docker_block(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text("{}")
+            with self.assertRaises(SystemExit) as exc:
+                environment_module.parse_environment_config(
+                    {"environment": {"docker": {"base_image": "python:3.11-slim"}}},
+                    config_path=config_path,
+                )
+            self.assertEqual(
+                str(exc.exception),
+                "Config 'environment.docker' is not supported (Docker backend was removed)",
+            )
 
 
 if __name__ == "__main__":

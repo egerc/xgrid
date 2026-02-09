@@ -54,7 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--env-backend",
-        choices=["auto", "none", "uv", "docker"],
+        choices=["auto", "none", "uv"],
         default="auto",
         help="Environment backend selection",
     )
@@ -267,19 +267,6 @@ def _build_managed_run_arguments(
     script_path = context.script_path
     config_path = context.config_path
     output_template = context.output_template
-    if backend == "docker":
-        script_path = environment_module.rewrite_path_for_docker(
-            script_path,
-            project_root=project_root,
-        )
-        config_path = environment_module.rewrite_path_for_docker(
-            config_path,
-            project_root=project_root,
-        )
-        output_template = environment_module.rewrite_path_for_docker(
-            output_template,
-            project_root=project_root,
-        )
 
     args = [
         "run",
